@@ -75,6 +75,142 @@ def extract_text_from_content(content):
     return ""
 
 
+def extract_snippet(content, max_length=200, query=None):
+    """Extract a relevant snippet from content.
+
+    If query is provided, centers snippet around first match.
+
+    Args:
+        content: The text content to extract a snippet from
+        max_length: Maximum length of the snippet
+        query: Optional query to center the snippet around
+
+    Returns:
+        A snippet string, potentially with "..." added
+    """
+    if len(content) <= max_length:
+        return content
+
+    if query:
+        # Find first occurrence of query (case-insensitive)
+        pos = content.lower().find(query.lower())
+        if pos != -1:
+            # Center window around match
+            start = max(0, pos - max_length // 2)
+            end = min(len(content), start + max_length)
+            # Adjust start if we're near the end
+            if end == len(content):
+                start = max(0, end - max_length)
+            snippet = content[start:end]
+            if start > 0:
+                snippet = "..." + snippet
+            if end < len(content):
+                snippet = snippet + "..."
+            return snippet
+
+    # Default: first N characters
+    return content[:max_length] + "..."
+
+
+def extract_searchable_content(loglines, project_name, session_name):
+    """Extract searchable documents from a session's loglines.
+
+    Args:
+        loglines: List of log entries from parse_session_file()
+        project_name: Name of the project for document IDs
+        session_name: Name of the session for document IDs
+
+    Returns:
+        List of document dicts for the search index, each containing:
+        - id: Unique document ID
+        - project: Project name
+        - session: Session name
+        - page: Page filename (e.g., "page-001.html")
+        - anchor: Anchor ID for linking
+        - type: Document type (user, assistant, tool_use, tool_result)
+        - timestamp: ISO timestamp
+        - content: Searchable text content
+        - snippet: Short preview text
+    """
+    documents = []
+    page_num = 1
+    user_prompt_count = 0
+
+    def make_anchor(timestamp):
+        """Create anchor ID from timestamp."""
+        if not timestamp:
+            return ""
+        # Convert to safe ID: msg-2025-01-01T10-00-00-000Z
+        return "msg-" + timestamp.replace(":", "-").replace(".", "-")
+
+    def add_document(doc_type, timestamp, content):
+        """Helper to add a document to the list."""
+        if not content or not content.strip():
+            return
+        documents.append(
+            {
+                "id": f"{project_name}/{session_name}/page-{page_num:03d}#{make_anchor(timestamp)}",
+                "project": project_name,
+                "session": session_name,
+                "page": f"page-{page_num:03d}.html",
+                "anchor": make_anchor(timestamp),
+                "type": doc_type,
+                "timestamp": timestamp,
+                "content": content.strip(),
+                "snippet": extract_snippet(content.strip()),
+            }
+        )
+
+    for entry in loglines:
+        log_type = entry.get("type")
+        timestamp = entry.get("timestamp", "")
+        message_data = entry.get("message", {})
+        content = message_data.get("content", "")
+
+        if log_type == "user":
+            # Track page number based on user prompts
+            user_prompt_count += 1
+            if user_prompt_count > PROMPTS_PER_PAGE:
+                page_num += 1
+                user_prompt_count = 1
+
+            # Handle different content formats
+            if isinstance(content, str):
+                add_document("user", timestamp, content)
+            elif isinstance(content, list):
+                for block in content:
+                    if isinstance(block, dict):
+                        block_type = block.get("type")
+                        if block_type == "text":
+                            add_document("user", timestamp, block.get("text", ""))
+                        elif block_type == "tool_result":
+                            # Tool results - truncate to 500 chars
+                            result_content = block.get("content", "")
+                            if isinstance(result_content, str):
+                                truncated = result_content[:500]
+                                add_document("tool_result", timestamp, truncated)
+
+        elif log_type == "assistant":
+            if isinstance(content, list):
+                for block in content:
+                    if isinstance(block, dict):
+                        block_type = block.get("type")
+                        if block_type == "text":
+                            add_document("assistant", timestamp, block.get("text", ""))
+                        elif block_type == "tool_use":
+                            # Index tool name and input
+                            tool_name = block.get("name", "")
+                            tool_input = block.get("input", {})
+                            if isinstance(tool_input, dict):
+                                input_str = json.dumps(tool_input)[:1000]
+                            else:
+                                input_str = str(tool_input)[:1000]
+                            tool_content = f"{tool_name}: {input_str}"
+                            add_document("tool_use", timestamp, tool_content)
+
+    return documents
+
+
 # Module-level variable for GitHub repo (set by generate_html)
 _github_repo = None
 
@@ -304,7 +440,11 @@ def find_all_sessions(folder, include_agents=False):
 
 
 def generate_batch_html(
-    source_folder, output_dir, include_agents=False, progress_callback=None
+    source_folder,
+    output_dir,
+    include_agents=False,
+    progress_callback=None,
+    no_search_index=False,
 ):
     """Generate HTML archive for all sessions in a Claude projects folder.
 
@@ -312,6 +452,7 @@ def generate_batch_html(
     - Master index.html listing all projects
     - Per-project directories with index.html listing sessions
     - Per-session directories with transcript pages
+    - search-index.js for full-text search (unless no_search_index=True)
 
     Args:
         source_folder: Path to the Claude projects folder
@@ -319,6 +460,7 @@ def generate_batch_html(
         include_agents: Whether to include agent-* session files
         progress_callback: Optional callback(project_name, session_name, current, total)
             called after each session is processed
+        no_search_index: If True, skip generating the search index
 
     Returns statistics dict with total_projects, total_sessions, failed_sessions, output_dir.
     """
@@ -369,8 +511,13 @@ def generate_batch_html(
         # Generate project index
         _generate_project_index(project, project_dir)
 
-    # Generate master index
-    _generate_master_index(projects, output_dir)
+    # Generate master index (with search UI if search index will be generated)
+    has_search_index = not no_search_index
+    _generate_master_index(projects, output_dir, has_search_index=has_search_index)
+
+    # Generate search index (unless disabled)
+    if has_search_index:
+        _generate_search_index(projects, output_dir)
 
     return {
         "total_projects": len(projects),
@@ -409,7 +556,7 @@ def _generate_project_index(project, output_dir):
     output_path.write_text(html_content, encoding="utf-8")
 
 
-def _generate_master_index(projects, output_dir):
+def _generate_master_index(projects, output_dir, has_search_index=False):
     """Generate master index.html listing all projects."""
     template = get_template("master_index.html")
 
@@ -436,16 +583,71 @@ def _generate_master_index(projects, output_dir):
             }
         )
 
+    # Load global search JavaScript if search index is enabled
+    global_search_js = ""
+    if has_search_index:
+        global_search_template = get_template("global_search.js")
+        global_search_js = global_search_template.render()
+
     html_content = template.render(
         projects=projects_data,
         total_projects=len(projects),
         total_sessions=total_sessions,
         css=CSS,
         js=JS,
+        has_search_index=has_search_index,
+        global_search_js=global_search_js,
     )
 
     output_path = output_dir / "index.html"
     output_path.write_text(html_content, encoding="utf-8")
+
+
+def _generate_search_index(projects, output_dir):
+    """Generate search-index.js containing all searchable content.
+
+    Creates a JavaScript file with a SEARCH_INDEX variable containing
+    all indexed documents for client-side full-text search.
+
+    Args:
+        projects: List of project dicts from find_all_sessions()
+        output_dir: Path to the output directory
+    """
+    all_documents = []
+
+    for project in projects:
+        project_name = project["name"]
+
+        for session in project["sessions"]:
+            session_name = session["path"].stem
+
+            try:
+                # Parse the session file
+                data = parse_session_file(session["path"])
+                loglines = data.get("loglines", [])
+
+                # Extract searchable content
+                documents = extract_searchable_content(
+                    loglines, project_name, session_name
+                )
+                all_documents.extend(documents)
+            except Exception:
+                # Skip sessions that fail to parse
+                continue
+
+    # Build the index structure
+    index_data = {
+        "version": 1,
+        "generated": datetime.now().astimezone().isoformat(),
+        "documents": all_documents,
+    }
+
+    # Write as JavaScript variable assignment
+    js_content = (
+        "var SEARCH_INDEX = " + json.dumps(index_data, ensure_ascii=False) + ";"
+    )
+    output_path = output_dir / "search-index.js"
+    output_path.write_text(js_content, encoding="utf-8")
 
 
 def parse_session_file(filepath):
@@ -1013,7 +1215,20 @@ details.continuation[open] summary { border-radius: 12px 12px 0 0; margin-bottom
 .search-result-page { padding: 6px 12px; background: rgba(0,0,0,0.03); font-size: 0.8rem; color: var(--text-muted); border-bottom: 1px solid rgba(0,0,0,0.06); }
 .search-result-content { padding: 12px; }
 .search-result mark { background: #fff59d; padding: 1px 2px; border-radius: 2px; }
-@media (max-width: 600px) { body { padding: 8px; } .message, .index-item { border-radius: 8px; } .message-content, .index-item-content { padding: 12px; } pre { font-size: 0.8rem; padding: 8px; } #search-box input { width: 120px; } #search-modal[open] { width: 95vw; height: 90vh; } }
+#global-search-box { display: none; align-items: center; gap: 8px; }
+#global-search-box input { padding: 6px 12px; border: 1px solid var(--assistant-border); border-radius: 6px; font-size: 16px; width: 180px; }
+#global-search-box button { background: var(--user-border); color: white; border: none; border-radius: 6px; padding: 6px 10px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+#global-search-box button:hover { background: #1565c0; }
+#global-search-modal[open] { border: none; border-radius: 12px; box-shadow: 0 4px 24px rgba(0,0,0,0.2); padding: 0; width: 90vw; max-width: 900px; height: 80vh; max-height: 80vh; display: flex; flex-direction: column; }
+#global-search-modal::backdrop { background: rgba(0,0,0,0.5); }
+#global-search-status { padding: 8px 16px; font-size: 0.85rem; color: var(--text-muted); border-bottom: 1px solid rgba(0,0,0,0.06); }
+#global-search-results { flex: 1; overflow-y: auto; padding: 16px; }
+.search-result-meta { display: flex; align-items: center; gap: 8px; padding: 6px 12px; background: rgba(0,0,0,0.03); font-size: 0.8rem; color: var(--text-muted); border-bottom: 1px solid rgba(0,0,0,0.06); flex-wrap: wrap; }
+.search-result-project { font-weight: 600; color: var(--user-border); }
+.search-result-type { background: var(--assistant-border); padding: 2px 6px; border-radius: 4px; font-size: 0.75rem; }
+.search-result-snippet { padding: 12px; font-size: 0.9rem; line-height: 1.5; }
+.search-more { padding: 12px; text-align: center; color: var(--text-muted); font-style: italic; }
+@media (max-width: 600px) { body { padding: 8px; } .message, .index-item { border-radius: 8px; } .message-content, .index-item-content { padding: 12px; } pre { font-size: 0.8rem; padding: 8px; } #search-box input, #global-search-box input { width: 100%; min-width: 100px; } .header-row { flex-direction: column; align-items: stretch; } .header-row h1 { text-align: center; } #global-search-box { width: 100%; justify-content: center; } #search-modal[open], #global-search-modal[open] { width: 95vw; height: 90vh; } .search-modal-header { flex-wrap: wrap; } .search-modal-header input { min-width: 150px; } .search-result-meta { font-size: 0.75rem; } .search-result-snippet { font-size: 0.85rem; padding: 8px; } }
 """
 
 JS = """
@@ -2030,7 +2245,14 @@ def web_cmd(
     is_flag=True,
     help="Suppress all output except errors.",
 )
-def all_cmd(source, output, include_agents, dry_run, open_browser, quiet):
+@click.option(
+    "--no-search-index",
+    is_flag=True,
+    help="Skip generating the search index (faster, smaller output).",
+)
+def all_cmd(
+    source, output, include_agents, dry_run, open_browser, quiet, no_search_index
+):
     """Convert all local Claude Code sessions to a browsable HTML archive.
 
     Creates a directory structure with:
@@ -2096,6 +2318,7 @@ def all_cmd(source, output, include_agents, dry_run, open_browser, quiet):
         output,
         include_agents=include_agents,
         progress_callback=on_progress,
+        no_search_index=no_search_index,
     )
 
     # Report any failures
