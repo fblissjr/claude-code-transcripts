@@ -189,7 +189,7 @@
                             </div>
                         </div>
 
-                        <!-- Row 5: Session Summary and Enhanced Facts -->
+                        <!-- Row 5: Session Summary and Granular Facts -->
                         <div>
                             <div class="schema-table fact-table border-2 border-green-500" id="schema-fact-summary">
                                 <div class="schema-header bg-green-600">fact_session_summary</div>
@@ -226,7 +226,7 @@
                             </div>
                         </div>
 
-                        <!-- Row 6: Enhanced Dimensions -->
+                        <!-- Row 6: Granular Dimensions -->
                         <div>
                             <div class="schema-table dim-table" id="schema-dim-file">
                                 <div class="schema-header">dim_file</div>
@@ -369,7 +369,7 @@
                 </div>
             </div>
 
-            <!-- KPI Cards Row 2 (Enhanced) -->
+            <!-- KPI Cards Row 2 -->
             <div class="grid grid-cols-4 gap-4 mb-6">
                 <div class="bg-white rounded-lg shadow-md p-4">
                     <div class="text-sm text-gray-500">Files Touched</div>
@@ -722,7 +722,7 @@ LIMIT 20;</textarea>
             showLoading(true);
             try {
                 await refreshKPIs();
-                await refreshEnhancedKPIs();
+                await refreshGranularKPIs();
                 await refreshToolCategoryChart();
                 await refreshModelFamilyChart();
                 await refreshTimeOfDayChart();
@@ -776,8 +776,8 @@ LIMIT 20;</textarea>
             return num.toLocaleString();
         }
 
-        // Refresh Enhanced KPIs
-        async function refreshEnhancedKPIs() {
+        // Refresh Granular KPIs
+        async function refreshGranularKPIs() {
             try {
                 // Files touched
                 const filesResult = await conn.query('SELECT COUNT(DISTINCT file_key) as cnt FROM fact_file_operations');
@@ -800,7 +800,7 @@ LIMIT 20;</textarea>
                 const errorRate = errorRateResult.toArray()[0].rate || 0;
                 document.getElementById('kpi-error-rate').textContent = errorRate + '%';
             } catch (e) {
-                console.error('Error refreshing enhanced KPIs:', e);
+                console.error('Error refreshing granular KPIs:', e);
                 // Set defaults if tables don't exist
                 document.getElementById('kpi-files').textContent = '-';
                 document.getElementById('kpi-code-blocks').textContent = '-';

@@ -1379,7 +1379,7 @@ def create_star_schema(db_path):
     )
 
     # =========================================================================
-    # Enhanced Granular Dimensions
+    # Granular Dimensions
     # =========================================================================
 
     # dim_file - File dimension for file operations
@@ -1418,7 +1418,7 @@ def create_star_schema(db_path):
     )
 
     # =========================================================================
-    # Enhanced Granular Fact Tables
+    # Granular Fact Tables
     # =========================================================================
 
     # fact_file_operations - File-level tool interactions
@@ -1494,7 +1494,7 @@ def create_star_schema(db_path):
 
 
 # =============================================================================
-# Enhanced ETL Helper Functions
+# Granular ETL Helper Functions
 # =============================================================================
 
 # Language detection patterns for code blocks
@@ -1794,7 +1794,7 @@ def run_star_schema_etl(
     tools_seen = set()
     dates_seen = set()  # Set of date_key integers
 
-    # Enhanced tracking structures
+    # Granular tracking structures
     files_seen = {}  # file_path -> file_info dict
     file_operations_data = []
     code_blocks_data = []
@@ -2444,7 +2444,7 @@ def run_star_schema_etl(
     )
 
     # ==========================================================================
-    # Phase 3: Load Enhanced Granular Tables
+    # Phase 3: Load Granular Tables
     # ==========================================================================
 
     # Load dim_file

@@ -35,7 +35,7 @@ The star schema follows dimensional modeling best practices:
                     │   _blocks   │
                     └─────────────┘
 
-    Enhanced Analytics Tables:
+    Granular Analytics Tables:
 
     ┌───────────┐   ┌─────────────┐   ┌───────────────────┐
     │ dim_file  │───│fact_file_   │───│dim_programming_   │

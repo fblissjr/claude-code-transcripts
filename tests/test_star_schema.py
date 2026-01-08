@@ -914,7 +914,7 @@ class TestNoHardConstraints:
 
 
 # =============================================================================
-# Enhanced Granular Schema Tests
+# Granular Schema Tests
 # =============================================================================
 
 
@@ -1191,8 +1191,8 @@ def granular_session_file():
         yield Path(f.name)
 
 
-class TestEnhancedDimensions:
-    """Tests for enhanced dimension tables."""
+class TestGranularDimensions:
+    """Tests for granular dimension tables."""
 
     def test_creates_dim_file_table(self, output_dir):
         """Test that dim_file dimension table is created."""
@@ -1254,8 +1254,8 @@ class TestEnhancedDimensions:
         conn.close()
 
 
-class TestEnhancedFactTables:
-    """Tests for enhanced fact tables."""
+class TestGranularFactTables:
+    """Tests for granular fact tables."""
 
     def test_creates_fact_file_operations_table(self, output_dir):
         """Test that fact_file_operations table is created."""
