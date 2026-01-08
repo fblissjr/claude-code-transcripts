@@ -911,3 +911,685 @@ class TestNoHardConstraints:
         ).fetchone()
         assert result[0] == 1
         conn.close()
+
+
+# =============================================================================
+# Enhanced Granular Schema Tests
+# =============================================================================
+
+
+@pytest.fixture
+def granular_session_file():
+    """Create a session file with rich content for granular testing."""
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False) as f:
+        # User message asking to read and modify a file
+        f.write(
+            json.dumps(
+                {
+                    "type": "user",
+                    "uuid": "user-001",
+                    "parentUuid": None,
+                    "sessionId": "session-456",
+                    "timestamp": "2025-01-20T14:30:00.000Z",
+                    "cwd": "/home/user/myproject",
+                    "gitBranch": "feature/auth",
+                    "version": "2.1.0",
+                    "message": {
+                        "role": "user",
+                        "content": "Read the auth.py file and fix the login bug",
+                    },
+                }
+            )
+            + "\n"
+        )
+        # Assistant reads file
+        f.write(
+            json.dumps(
+                {
+                    "type": "assistant",
+                    "uuid": "asst-001",
+                    "parentUuid": "user-001",
+                    "sessionId": "session-456",
+                    "timestamp": "2025-01-20T14:30:05.000Z",
+                    "message": {
+                        "role": "assistant",
+                        "model": "claude-opus-4-5-20251101",
+                        "content": [
+                            {"type": "text", "text": "Let me read the auth file."},
+                            {
+                                "type": "tool_use",
+                                "id": "tool-read-001",
+                                "name": "Read",
+                                "input": {
+                                    "file_path": "/home/user/myproject/src/auth.py"
+                                },
+                            },
+                        ],
+                    },
+                }
+            )
+            + "\n"
+        )
+        # Tool result with Python code
+        f.write(
+            json.dumps(
+                {
+                    "type": "user",
+                    "uuid": "user-002",
+                    "parentUuid": "asst-001",
+                    "sessionId": "session-456",
+                    "timestamp": "2025-01-20T14:30:10.000Z",
+                    "message": {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": "tool-read-001",
+                                "content": """def login(username, password):
+    # Bug: not checking password correctly
+    if username == 'admin':
+        return True
+    return False""",
+                            }
+                        ],
+                    },
+                }
+            )
+            + "\n"
+        )
+        # Assistant analyzes and uses Bash
+        f.write(
+            json.dumps(
+                {
+                    "type": "assistant",
+                    "uuid": "asst-002",
+                    "parentUuid": "user-002",
+                    "sessionId": "session-456",
+                    "timestamp": "2025-01-20T14:30:20.000Z",
+                    "message": {
+                        "role": "assistant",
+                        "model": "claude-opus-4-5-20251101",
+                        "content": [
+                            {
+                                "type": "thinking",
+                                "thinking": "I see the bug - password is not being validated. Need to fix this.",
+                            },
+                            {
+                                "type": "text",
+                                "text": "I found the bug. Let me run the tests first:\n\n```python\ndef login(username, password):\n    # Fixed: now validates password\n    return validate_credentials(username, password)\n```",
+                            },
+                            {
+                                "type": "tool_use",
+                                "id": "tool-bash-001",
+                                "name": "Bash",
+                                "input": {
+                                    "command": "cd /home/user/myproject && python -m pytest tests/"
+                                },
+                            },
+                        ],
+                    },
+                }
+            )
+            + "\n"
+        )
+        # Bash result
+        f.write(
+            json.dumps(
+                {
+                    "type": "user",
+                    "uuid": "user-003",
+                    "parentUuid": "asst-002",
+                    "sessionId": "session-456",
+                    "timestamp": "2025-01-20T14:30:30.000Z",
+                    "message": {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": "tool-bash-001",
+                                "content": "FAILED tests/test_auth.py::test_login - AssertionError",
+                                "is_error": True,
+                            }
+                        ],
+                    },
+                }
+            )
+            + "\n"
+        )
+        # Assistant edits file
+        f.write(
+            json.dumps(
+                {
+                    "type": "assistant",
+                    "uuid": "asst-003",
+                    "parentUuid": "user-003",
+                    "sessionId": "session-456",
+                    "timestamp": "2025-01-20T14:30:40.000Z",
+                    "message": {
+                        "role": "assistant",
+                        "model": "claude-sonnet-4-20250514",
+                        "content": [
+                            {"type": "text", "text": "Let me fix the auth file."},
+                            {
+                                "type": "tool_use",
+                                "id": "tool-edit-001",
+                                "name": "Edit",
+                                "input": {
+                                    "file_path": "/home/user/myproject/src/auth.py",
+                                    "old_string": "if username == 'admin':",
+                                    "new_string": "if verify_password(username, password):",
+                                },
+                            },
+                        ],
+                    },
+                }
+            )
+            + "\n"
+        )
+        # Edit result
+        f.write(
+            json.dumps(
+                {
+                    "type": "user",
+                    "uuid": "user-004",
+                    "parentUuid": "asst-003",
+                    "sessionId": "session-456",
+                    "timestamp": "2025-01-20T14:30:45.000Z",
+                    "message": {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": "tool-edit-001",
+                                "content": "File edited successfully",
+                            }
+                        ],
+                    },
+                }
+            )
+            + "\n"
+        )
+        # Assistant uses Grep
+        f.write(
+            json.dumps(
+                {
+                    "type": "assistant",
+                    "uuid": "asst-004",
+                    "parentUuid": "user-004",
+                    "sessionId": "session-456",
+                    "timestamp": "2025-01-20T14:30:50.000Z",
+                    "message": {
+                        "role": "assistant",
+                        "model": "claude-sonnet-4-20250514",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "Let me search for related files.",
+                            },
+                            {
+                                "type": "tool_use",
+                                "id": "tool-grep-001",
+                                "name": "Grep",
+                                "input": {
+                                    "pattern": "verify_password",
+                                    "path": "/home/user/myproject",
+                                },
+                            },
+                        ],
+                    },
+                }
+            )
+            + "\n"
+        )
+        # Grep result
+        f.write(
+            json.dumps(
+                {
+                    "type": "user",
+                    "uuid": "user-005",
+                    "parentUuid": "asst-004",
+                    "sessionId": "session-456",
+                    "timestamp": "2025-01-20T14:30:55.000Z",
+                    "message": {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": "tool-grep-001",
+                                "content": "/home/user/myproject/src/utils.py:15:def verify_password(username, password):",
+                            }
+                        ],
+                    },
+                }
+            )
+            + "\n"
+        )
+        # Final assistant message
+        f.write(
+            json.dumps(
+                {
+                    "type": "assistant",
+                    "uuid": "asst-005",
+                    "parentUuid": "user-005",
+                    "sessionId": "session-456",
+                    "timestamp": "2025-01-20T14:31:00.000Z",
+                    "message": {
+                        "role": "assistant",
+                        "model": "claude-sonnet-4-20250514",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "Done! The auth.py file has been fixed to use proper password verification.",
+                            },
+                        ],
+                    },
+                }
+            )
+            + "\n"
+        )
+        f.flush()
+        yield Path(f.name)
+
+
+class TestEnhancedDimensions:
+    """Tests for enhanced dimension tables."""
+
+    def test_creates_dim_file_table(self, output_dir):
+        """Test that dim_file dimension table is created."""
+        db_path = output_dir / "test.duckdb"
+        conn = create_star_schema(db_path)
+
+        result = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='dim_file'"
+        ).fetchone()
+        assert result is not None
+        conn.close()
+
+    def test_dim_file_has_required_columns(self, output_dir):
+        """Test that dim_file has all required columns."""
+        db_path = output_dir / "test.duckdb"
+        conn = create_star_schema(db_path)
+
+        columns = conn.execute("DESCRIBE dim_file").fetchall()
+        column_names = [c[0] for c in columns]
+        assert "file_key" in column_names
+        assert "file_path" in column_names
+        assert "file_name" in column_names
+        assert "file_extension" in column_names
+        assert "directory_path" in column_names
+        conn.close()
+
+    def test_creates_dim_programming_language_table(self, output_dir):
+        """Test that dim_programming_language table is created."""
+        db_path = output_dir / "test.duckdb"
+        conn = create_star_schema(db_path)
+
+        result = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='dim_programming_language'"
+        ).fetchone()
+        assert result is not None
+        conn.close()
+
+    def test_dim_programming_language_has_required_columns(self, output_dir):
+        """Test that dim_programming_language has all required columns."""
+        db_path = output_dir / "test.duckdb"
+        conn = create_star_schema(db_path)
+
+        columns = conn.execute("DESCRIBE dim_programming_language").fetchall()
+        column_names = [c[0] for c in columns]
+        assert "language_key" in column_names
+        assert "language_name" in column_names
+        assert "file_extensions" in column_names
+        conn.close()
+
+    def test_creates_dim_error_type_table(self, output_dir):
+        """Test that dim_error_type table is created."""
+        db_path = output_dir / "test.duckdb"
+        conn = create_star_schema(db_path)
+
+        result = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='dim_error_type'"
+        ).fetchone()
+        assert result is not None
+        conn.close()
+
+
+class TestEnhancedFactTables:
+    """Tests for enhanced fact tables."""
+
+    def test_creates_fact_file_operations_table(self, output_dir):
+        """Test that fact_file_operations table is created."""
+        db_path = output_dir / "test.duckdb"
+        conn = create_star_schema(db_path)
+
+        result = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='fact_file_operations'"
+        ).fetchone()
+        assert result is not None
+        conn.close()
+
+    def test_fact_file_operations_has_required_columns(self, output_dir):
+        """Test that fact_file_operations has all required columns."""
+        db_path = output_dir / "test.duckdb"
+        conn = create_star_schema(db_path)
+
+        columns = conn.execute("DESCRIBE fact_file_operations").fetchall()
+        column_names = [c[0] for c in columns]
+        assert "file_operation_id" in column_names
+        assert "tool_call_id" in column_names
+        assert "session_key" in column_names
+        assert "file_key" in column_names
+        assert "tool_key" in column_names
+        assert "operation_type" in column_names  # read, write, edit, etc.
+        assert "file_size_chars" in column_names
+        conn.close()
+
+    def test_creates_fact_code_blocks_table(self, output_dir):
+        """Test that fact_code_blocks table is created."""
+        db_path = output_dir / "test.duckdb"
+        conn = create_star_schema(db_path)
+
+        result = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='fact_code_blocks'"
+        ).fetchone()
+        assert result is not None
+        conn.close()
+
+    def test_fact_code_blocks_has_required_columns(self, output_dir):
+        """Test that fact_code_blocks has all required columns."""
+        db_path = output_dir / "test.duckdb"
+        conn = create_star_schema(db_path)
+
+        columns = conn.execute("DESCRIBE fact_code_blocks").fetchall()
+        column_names = [c[0] for c in columns]
+        assert "code_block_id" in column_names
+        assert "message_id" in column_names
+        assert "session_key" in column_names
+        assert "language_key" in column_names
+        assert "line_count" in column_names
+        assert "char_count" in column_names
+        assert "code_text" in column_names
+        conn.close()
+
+    def test_creates_fact_errors_table(self, output_dir):
+        """Test that fact_errors table is created."""
+        db_path = output_dir / "test.duckdb"
+        conn = create_star_schema(db_path)
+
+        result = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='fact_errors'"
+        ).fetchone()
+        assert result is not None
+        conn.close()
+
+    def test_fact_messages_has_token_columns(self, output_dir):
+        """Test that fact_messages has token tracking columns."""
+        db_path = output_dir / "test.duckdb"
+        conn = create_star_schema(db_path)
+
+        columns = conn.execute("DESCRIBE fact_messages").fetchall()
+        column_names = [c[0] for c in columns]
+        assert "estimated_tokens" in column_names
+        assert "word_count" in column_names
+        conn.close()
+
+
+class TestGranularETL:
+    """Tests for granular ETL processing."""
+
+    def test_etl_populates_dim_file(self, granular_session_file, output_dir):
+        """Test that ETL extracts files from tool calls."""
+        db_path = output_dir / "test.duckdb"
+        conn = create_star_schema(db_path)
+        run_star_schema_etl(
+            conn, granular_session_file, "test-project", include_thinking=True
+        )
+
+        result = conn.execute(
+            "SELECT file_name, file_extension FROM dim_file ORDER BY file_name"
+        ).fetchall()
+        file_names = [r[0] for r in result]
+        # Should have auth.py and utils.py from the tool calls
+        assert "auth.py" in file_names
+        conn.close()
+
+    def test_etl_populates_fact_file_operations(
+        self, granular_session_file, output_dir
+    ):
+        """Test that ETL creates file operation records."""
+        db_path = output_dir / "test.duckdb"
+        conn = create_star_schema(db_path)
+        run_star_schema_etl(
+            conn, granular_session_file, "test-project", include_thinking=True
+        )
+
+        result = conn.execute(
+            """SELECT ffo.operation_type, df.file_name
+               FROM fact_file_operations ffo
+               JOIN dim_file df ON ffo.file_key = df.file_key
+               ORDER BY df.file_name, ffo.operation_type"""
+        ).fetchall()
+        # Should have read and edit operations on auth.py
+        operations = [(r[0], r[1]) for r in result]
+        assert ("read", "auth.py") in operations
+        assert ("edit", "auth.py") in operations
+        conn.close()
+
+    def test_etl_extracts_code_blocks(self, granular_session_file, output_dir):
+        """Test that ETL extracts code blocks from messages."""
+        db_path = output_dir / "test.duckdb"
+        conn = create_star_schema(db_path)
+        run_star_schema_etl(
+            conn, granular_session_file, "test-project", include_thinking=True
+        )
+
+        result = conn.execute(
+            """SELECT dpl.language_name, fcb.line_count
+               FROM fact_code_blocks fcb
+               JOIN dim_programming_language dpl ON fcb.language_key = dpl.language_key"""
+        ).fetchall()
+        # Should detect Python code blocks
+        languages = [r[0] for r in result]
+        assert "python" in languages
+        conn.close()
+
+    def test_etl_tracks_errors(self, granular_session_file, output_dir):
+        """Test that ETL tracks tool errors."""
+        db_path = output_dir / "test.duckdb"
+        conn = create_star_schema(db_path)
+        run_star_schema_etl(
+            conn, granular_session_file, "test-project", include_thinking=True
+        )
+
+        result = conn.execute(
+            """SELECT fe.error_message, dt.tool_name
+               FROM fact_errors fe
+               JOIN dim_tool dt ON fe.tool_key = dt.tool_key"""
+        ).fetchall()
+        # Should have the pytest failure error
+        assert len(result) >= 1
+        conn.close()
+
+    def test_etl_estimates_tokens(self, granular_session_file, output_dir):
+        """Test that ETL estimates token counts."""
+        db_path = output_dir / "test.duckdb"
+        conn = create_star_schema(db_path)
+        run_star_schema_etl(
+            conn, granular_session_file, "test-project", include_thinking=True
+        )
+
+        result = conn.execute(
+            "SELECT estimated_tokens, word_count FROM fact_messages WHERE estimated_tokens > 0"
+        ).fetchall()
+        assert len(result) > 0
+        # Token estimate should be reasonable (roughly 1.3x word count)
+        for tokens, words in result:
+            if words > 0:
+                assert tokens >= words  # Tokens should be >= words
+        conn.close()
+
+
+class TestFileOperationAnalytics:
+    """Tests for file operation analytics queries."""
+
+    def test_files_by_operation_count(self, granular_session_file, output_dir):
+        """Test query for most frequently accessed files."""
+        db_path = output_dir / "test.duckdb"
+        conn = create_star_schema(db_path)
+        run_star_schema_etl(
+            conn, granular_session_file, "test-project", include_thinking=True
+        )
+
+        result = conn.execute(
+            """SELECT df.file_name, COUNT(*) as op_count
+               FROM fact_file_operations ffo
+               JOIN dim_file df ON ffo.file_key = df.file_key
+               GROUP BY df.file_name
+               ORDER BY op_count DESC"""
+        ).fetchall()
+        # auth.py should have multiple operations
+        assert len(result) > 0
+        assert result[0][0] == "auth.py"  # Most accessed file
+        conn.close()
+
+    def test_operations_by_file_extension(self, granular_session_file, output_dir):
+        """Test query for operations grouped by file extension."""
+        db_path = output_dir / "test.duckdb"
+        conn = create_star_schema(db_path)
+        run_star_schema_etl(
+            conn, granular_session_file, "test-project", include_thinking=True
+        )
+
+        result = conn.execute(
+            """SELECT df.file_extension, COUNT(*) as op_count
+               FROM fact_file_operations ffo
+               JOIN dim_file df ON ffo.file_key = df.file_key
+               GROUP BY df.file_extension"""
+        ).fetchall()
+        ext_counts = {r[0]: r[1] for r in result}
+        assert ".py" in ext_counts
+        conn.close()
+
+    def test_operation_types_distribution(self, granular_session_file, output_dir):
+        """Test query for operation type distribution."""
+        db_path = output_dir / "test.duckdb"
+        conn = create_star_schema(db_path)
+        run_star_schema_etl(
+            conn, granular_session_file, "test-project", include_thinking=True
+        )
+
+        result = conn.execute(
+            """SELECT operation_type, COUNT(*) as count
+               FROM fact_file_operations
+               GROUP BY operation_type
+               ORDER BY count DESC"""
+        ).fetchall()
+        op_types = [r[0] for r in result]
+        # Should have read and edit operations
+        assert "read" in op_types
+        assert "edit" in op_types
+        conn.close()
+
+
+class TestCodeBlockAnalytics:
+    """Tests for code block analytics queries."""
+
+    def test_code_by_language(self, granular_session_file, output_dir):
+        """Test query for code blocks by language."""
+        db_path = output_dir / "test.duckdb"
+        conn = create_star_schema(db_path)
+        run_star_schema_etl(
+            conn, granular_session_file, "test-project", include_thinking=True
+        )
+
+        result = conn.execute(
+            """SELECT dpl.language_name, COUNT(*) as block_count, SUM(fcb.line_count) as total_lines
+               FROM fact_code_blocks fcb
+               JOIN dim_programming_language dpl ON fcb.language_key = dpl.language_key
+               GROUP BY dpl.language_name"""
+        ).fetchall()
+        lang_stats = {r[0]: (r[1], r[2]) for r in result}
+        assert "python" in lang_stats
+        conn.close()
+
+    def test_code_blocks_by_session(self, granular_session_file, output_dir):
+        """Test query for code blocks per session."""
+        db_path = output_dir / "test.duckdb"
+        conn = create_star_schema(db_path)
+        run_star_schema_etl(
+            conn, granular_session_file, "test-project", include_thinking=True
+        )
+
+        result = conn.execute(
+            """SELECT ds.session_id, COUNT(*) as code_blocks, SUM(fcb.char_count) as total_chars
+               FROM fact_code_blocks fcb
+               JOIN dim_session ds ON fcb.session_key = ds.session_key
+               GROUP BY ds.session_id"""
+        ).fetchall()
+        assert len(result) > 0
+        conn.close()
+
+
+class TestErrorAnalytics:
+    """Tests for error tracking analytics."""
+
+    def test_errors_by_tool(self, granular_session_file, output_dir):
+        """Test query for errors grouped by tool."""
+        db_path = output_dir / "test.duckdb"
+        conn = create_star_schema(db_path)
+        run_star_schema_etl(
+            conn, granular_session_file, "test-project", include_thinking=True
+        )
+
+        result = conn.execute(
+            """SELECT dt.tool_name, COUNT(*) as error_count
+               FROM fact_errors fe
+               JOIN dim_tool dt ON fe.tool_key = dt.tool_key
+               GROUP BY dt.tool_name
+               ORDER BY error_count DESC"""
+        ).fetchall()
+        # Bash had an error in our test data
+        tool_errors = {r[0]: r[1] for r in result}
+        assert "Bash" in tool_errors
+        conn.close()
+
+
+class TestTokenAndCostAnalytics:
+    """Tests for token estimation and cost analytics."""
+
+    def test_tokens_by_model(self, granular_session_file, output_dir):
+        """Test query for token usage by model."""
+        db_path = output_dir / "test.duckdb"
+        conn = create_star_schema(db_path)
+        run_star_schema_etl(
+            conn, granular_session_file, "test-project", include_thinking=True
+        )
+
+        result = conn.execute(
+            """SELECT dm.model_family, SUM(fm.estimated_tokens) as total_tokens
+               FROM fact_messages fm
+               JOIN dim_model dm ON fm.model_key = dm.model_key
+               WHERE fm.model_key IS NOT NULL
+               GROUP BY dm.model_family"""
+        ).fetchall()
+        assert len(result) > 0
+        conn.close()
+
+    def test_tokens_by_message_type(self, granular_session_file, output_dir):
+        """Test query for tokens by message type."""
+        db_path = output_dir / "test.duckdb"
+        conn = create_star_schema(db_path)
+        run_star_schema_etl(
+            conn, granular_session_file, "test-project", include_thinking=True
+        )
+
+        result = conn.execute(
+            """SELECT dmt.message_type, SUM(fm.estimated_tokens) as total_tokens, AVG(fm.word_count) as avg_words
+               FROM fact_messages fm
+               JOIN dim_message_type dmt ON fm.message_type_key = dmt.message_type_key
+               GROUP BY dmt.message_type"""
+        ).fetchall()
+        msg_types = {r[0]: (r[1], r[2]) for r in result}
+        assert "user" in msg_types
+        assert "assistant" in msg_types
+        conn.close()

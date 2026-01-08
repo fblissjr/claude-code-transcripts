@@ -1310,6 +1310,8 @@ def create_star_schema(db_path):
             has_tool_use BOOLEAN,
             has_tool_result BOOLEAN,
             has_thinking BOOLEAN,
+            word_count INTEGER,
+            estimated_tokens INTEGER,
             content_text TEXT,
             content_json JSON
         )
@@ -1376,6 +1378,102 @@ def create_star_schema(db_path):
     """
     )
 
+    # =========================================================================
+    # Enhanced Granular Dimensions
+    # =========================================================================
+
+    # dim_file - File dimension for file operations
+    conn.execute(
+        """
+        CREATE OR REPLACE TABLE dim_file (
+            file_key VARCHAR,
+            file_path VARCHAR,
+            file_name VARCHAR,
+            file_extension VARCHAR,
+            directory_path VARCHAR
+        )
+    """
+    )
+
+    # dim_programming_language - Language dimension for code blocks
+    conn.execute(
+        """
+        CREATE OR REPLACE TABLE dim_programming_language (
+            language_key VARCHAR,
+            language_name VARCHAR,
+            file_extensions VARCHAR
+        )
+    """
+    )
+
+    # dim_error_type - Error classification dimension
+    conn.execute(
+        """
+        CREATE OR REPLACE TABLE dim_error_type (
+            error_type_key VARCHAR,
+            error_type VARCHAR,
+            error_category VARCHAR
+        )
+    """
+    )
+
+    # =========================================================================
+    # Enhanced Granular Fact Tables
+    # =========================================================================
+
+    # fact_file_operations - File-level tool interactions
+    conn.execute(
+        """
+        CREATE OR REPLACE TABLE fact_file_operations (
+            file_operation_id VARCHAR,
+            tool_call_id VARCHAR,
+            session_key VARCHAR,
+            file_key VARCHAR,
+            tool_key VARCHAR,
+            date_key INTEGER,
+            time_key INTEGER,
+            operation_type VARCHAR,
+            file_size_chars INTEGER,
+            timestamp TIMESTAMP
+        )
+    """
+    )
+
+    # fact_code_blocks - Code snippets extracted from messages
+    conn.execute(
+        """
+        CREATE OR REPLACE TABLE fact_code_blocks (
+            code_block_id VARCHAR,
+            message_id VARCHAR,
+            session_key VARCHAR,
+            language_key VARCHAR,
+            date_key INTEGER,
+            time_key INTEGER,
+            block_index INTEGER,
+            line_count INTEGER,
+            char_count INTEGER,
+            code_text TEXT
+        )
+    """
+    )
+
+    # fact_errors - Error tracking for tool calls
+    conn.execute(
+        """
+        CREATE OR REPLACE TABLE fact_errors (
+            error_id VARCHAR,
+            tool_call_id VARCHAR,
+            session_key VARCHAR,
+            tool_key VARCHAR,
+            error_type_key VARCHAR,
+            date_key INTEGER,
+            time_key INTEGER,
+            error_message TEXT,
+            timestamp TIMESTAMP
+        )
+    """
+    )
+
     # Pre-populate dim_message_type with known values
     for msg_type in ["user", "assistant"]:
         key = generate_dimension_key(msg_type)
@@ -1393,6 +1491,258 @@ def create_star_schema(db_path):
         )
 
     return conn
+
+
+# =============================================================================
+# Enhanced ETL Helper Functions
+# =============================================================================
+
+# Language detection patterns for code blocks
+LANGUAGE_EXTENSIONS = {
+    "python": [".py", ".pyw", ".pyi"],
+    "javascript": [".js", ".jsx", ".mjs"],
+    "typescript": [".ts", ".tsx"],
+    "java": [".java"],
+    "c": [".c", ".h"],
+    "cpp": [".cpp", ".cc", ".cxx", ".hpp", ".hh"],
+    "csharp": [".cs"],
+    "go": [".go"],
+    "rust": [".rs"],
+    "ruby": [".rb"],
+    "php": [".php"],
+    "swift": [".swift"],
+    "kotlin": [".kt", ".kts"],
+    "scala": [".scala"],
+    "r": [".r", ".R"],
+    "sql": [".sql"],
+    "html": [".html", ".htm"],
+    "css": [".css", ".scss", ".sass", ".less"],
+    "json": [".json"],
+    "yaml": [".yaml", ".yml"],
+    "xml": [".xml"],
+    "markdown": [".md", ".markdown"],
+    "shell": [".sh", ".bash", ".zsh"],
+    "powershell": [".ps1", ".psm1"],
+    "dockerfile": ["Dockerfile"],
+    "toml": [".toml"],
+}
+
+# Code block regex pattern: ```language\ncode\n```
+import re
+
+CODE_BLOCK_PATTERN = re.compile(r"```(\w*)\n(.*?)```", re.DOTALL)
+
+
+def extract_file_info(file_path):
+    """Extract file information from a file path.
+
+    Args:
+        file_path: Full path to a file
+
+    Returns:
+        dict with file_key, file_path, file_name, file_extension, directory_path
+    """
+    if not file_path:
+        return None
+
+    path = Path(file_path)
+    file_name = path.name
+    file_extension = path.suffix if path.suffix else ""
+    directory_path = str(path.parent)
+
+    return {
+        "file_key": generate_dimension_key(file_path),
+        "file_path": file_path,
+        "file_name": file_name,
+        "file_extension": file_extension,
+        "directory_path": directory_path,
+    }
+
+
+def detect_language_from_extension(file_path):
+    """Detect programming language from file extension.
+
+    Args:
+        file_path: Path to a file
+
+    Returns:
+        Language name or 'unknown'
+    """
+    if not file_path:
+        return "unknown"
+
+    path = Path(file_path)
+    ext = path.suffix.lower()
+    name = path.name
+
+    # Check for Dockerfile (no extension)
+    if name == "Dockerfile":
+        return "dockerfile"
+
+    for lang, extensions in LANGUAGE_EXTENSIONS.items():
+        if ext in extensions:
+            return lang
+
+    return "unknown"
+
+
+def detect_language_from_hint(hint):
+    """Detect programming language from code block hint.
+
+    Args:
+        hint: Language hint from code block (e.g., 'python', 'js')
+
+    Returns:
+        Normalized language name or 'unknown'
+    """
+    if not hint:
+        return "unknown"
+
+    hint = hint.lower().strip()
+
+    # Direct matches
+    if hint in LANGUAGE_EXTENSIONS:
+        return hint
+
+    # Common aliases
+    aliases = {
+        "py": "python",
+        "js": "javascript",
+        "ts": "typescript",
+        "rb": "ruby",
+        "sh": "shell",
+        "bash": "shell",
+        "zsh": "shell",
+        "yml": "yaml",
+        "md": "markdown",
+        "c++": "cpp",
+        "c#": "csharp",
+        "jsx": "javascript",
+        "tsx": "typescript",
+    }
+
+    return aliases.get(hint, hint if hint else "unknown")
+
+
+def extract_code_blocks(text):
+    """Extract code blocks from text content.
+
+    Args:
+        text: Text that may contain markdown code blocks
+
+    Returns:
+        List of dicts with language, code, line_count, char_count
+    """
+    if not text:
+        return []
+
+    blocks = []
+    for match in CODE_BLOCK_PATTERN.finditer(text):
+        hint = match.group(1)
+        code = match.group(2)
+
+        language = detect_language_from_hint(hint)
+        line_count = code.count("\n") + 1 if code.strip() else 0
+        char_count = len(code)
+
+        blocks.append(
+            {
+                "language": language,
+                "code": code,
+                "line_count": line_count,
+                "char_count": char_count,
+            }
+        )
+
+    return blocks
+
+
+def estimate_tokens(text):
+    """Estimate token count for text.
+
+    Uses a simple heuristic: ~1.3 tokens per word for English text.
+    This is a rough approximation that works reasonably well for most content.
+
+    Args:
+        text: Text to estimate tokens for
+
+    Returns:
+        Estimated token count
+    """
+    if not text:
+        return 0
+
+    # Count words (split on whitespace)
+    words = len(text.split())
+
+    # Estimate tokens (roughly 1.3x words for English, more for code)
+    # Code tends to have more tokens per "word" due to punctuation
+    has_code = "```" in text or "def " in text or "function " in text
+    multiplier = 1.5 if has_code else 1.3
+
+    return int(words * multiplier)
+
+
+def count_words(text):
+    """Count words in text.
+
+    Args:
+        text: Text to count words in
+
+    Returns:
+        Word count
+    """
+    if not text:
+        return 0
+    return len(text.split())
+
+
+def get_operation_type(tool_name):
+    """Map tool name to file operation type.
+
+    Args:
+        tool_name: Name of the tool
+
+    Returns:
+        Operation type: 'read', 'write', 'edit', 'search', or 'other'
+    """
+    tool_lower = tool_name.lower() if tool_name else ""
+
+    if tool_lower == "read":
+        return "read"
+    elif tool_lower == "write":
+        return "write"
+    elif tool_lower in ("edit", "multiedit"):
+        return "edit"
+    elif tool_lower == "glob":
+        return "list"
+    elif tool_lower == "grep":
+        return "search"
+    else:
+        return "other"
+
+
+def extract_file_path_from_tool(tool_name, tool_input):
+    """Extract file path from tool input.
+
+    Args:
+        tool_name: Name of the tool
+        tool_input: Tool input dictionary
+
+    Returns:
+        File path string or None
+    """
+    if not isinstance(tool_input, dict):
+        return None
+
+    # Common file path parameter names
+    path_keys = ["file_path", "path", "filepath", "notebook_path"]
+
+    for key in path_keys:
+        if key in tool_input:
+            return tool_input[key]
+
+    return None
 
 
 def run_star_schema_etl(
@@ -1443,6 +1793,13 @@ def run_star_schema_etl(
     models_seen = set()
     tools_seen = set()
     dates_seen = set()  # Set of date_key integers
+
+    # Enhanced tracking structures
+    files_seen = {}  # file_path -> file_info dict
+    file_operations_data = []
+    code_blocks_data = []
+    errors_data = []
+    languages_seen = set()
 
     with open(session_path, "r", encoding="utf-8") as f:
         for line in f:
@@ -1586,6 +1943,39 @@ def run_star_schema_etl(
                             "time_key": time_key,
                         }
 
+                        # Track file operations for file-related tools
+                        file_path = extract_file_path_from_tool(tool_name, tool_input)
+                        if file_path:
+                            file_info = extract_file_info(file_path)
+                            if file_info and file_path not in files_seen:
+                                files_seen[file_path] = file_info
+
+                            # Track the file operation
+                            operation_type = get_operation_type(tool_name)
+                            file_content = tool_input.get("content", "")
+                            file_size = (
+                                len(file_content)
+                                if isinstance(file_content, str)
+                                else 0
+                            )
+
+                            file_operations_data.append(
+                                {
+                                    "file_operation_id": f"{tool_use_id}-file",
+                                    "tool_call_id": tool_use_id,
+                                    "session_key": session_key,
+                                    "file_key": (
+                                        file_info["file_key"] if file_info else None
+                                    ),
+                                    "tool_key": generate_dimension_key(tool_name),
+                                    "date_key": date_key,
+                                    "time_key": time_key,
+                                    "operation_type": operation_type,
+                                    "file_size_chars": file_size,
+                                    "timestamp": timestamp,
+                                }
+                            )
+
                         if should_track:
                             block_id = f"{message_id}-{idx}"
                             content_blocks_data.append(
@@ -1645,6 +2035,24 @@ def run_star_schema_etl(
                                     "output_text": output_text,
                                 }
                             )
+
+                            # Track errors
+                            if is_error:
+                                errors_data.append(
+                                    {
+                                        "error_id": f"{tool_use_id}-error",
+                                        "tool_call_id": tool_use_id,
+                                        "session_key": session_key,
+                                        "tool_key": tool_info["tool_key"],
+                                        "error_type_key": generate_dimension_key(
+                                            "tool_error"
+                                        ),
+                                        "date_key": tool_info["date_key"],
+                                        "time_key": tool_info["time_key"],
+                                        "error_message": output_text,
+                                        "timestamp": tool_info["timestamp"],
+                                    }
+                                )
 
                         if should_track:
                             block_id = f"{message_id}-{idx}"
@@ -1720,11 +2128,36 @@ def run_star_schema_etl(
 
                 text_content = " ".join(texts)
 
+            # Extract code blocks from text content
+            if text_content:
+                extracted_blocks = extract_code_blocks(text_content)
+                for cb_idx, cb in enumerate(extracted_blocks):
+                    language = cb["language"]
+                    languages_seen.add(language)
+                    code_blocks_data.append(
+                        {
+                            "code_block_id": f"{message_id}-code-{cb_idx}",
+                            "message_id": message_id,
+                            "session_key": session_key,
+                            "language_key": generate_dimension_key(language),
+                            "date_key": date_key,
+                            "time_key": time_key,
+                            "block_index": cb_idx,
+                            "line_count": cb["line_count"],
+                            "char_count": cb["char_count"],
+                            "code_text": cb["code"][:truncate_output],
+                        }
+                    )
+
             # Update counters
             if entry_type == "user":
                 user_count += 1
             else:
                 assistant_count += 1
+
+            # Calculate token and word counts
+            word_cnt = count_words(text_content)
+            token_est = estimate_tokens(text_content)
 
             # Build message record
             message_type_key = generate_dimension_key(entry_type)
@@ -1746,6 +2179,8 @@ def run_star_schema_etl(
                     "has_tool_use": has_tool_use,
                     "has_tool_result": has_tool_result,
                     "has_thinking": has_thinking,
+                    "word_count": word_cnt,
+                    "estimated_tokens": token_est,
                     "content_text": (
                         text_content[:truncate_output] if text_content else ""
                     ),
@@ -1906,8 +2341,8 @@ def run_star_schema_etl(
                (message_id, session_key, project_key, message_type_key, model_key,
                 date_key, time_key, parent_message_id, timestamp, content_length,
                 content_block_count, has_tool_use, has_tool_result, has_thinking,
-                content_text, content_json)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                word_count, estimated_tokens, content_text, content_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             [
                 msg["message_id"],
                 msg["session_key"],
@@ -1923,6 +2358,8 @@ def run_star_schema_etl(
                 msg["has_tool_use"],
                 msg["has_tool_result"],
                 msg["has_thinking"],
+                msg["word_count"],
+                msg["estimated_tokens"],
                 msg["content_text"],
                 msg["content_json"],
             ],
@@ -2005,6 +2442,121 @@ def run_star_schema_etl(
             last_timestamp,
         ],
     )
+
+    # ==========================================================================
+    # Phase 3: Load Enhanced Granular Tables
+    # ==========================================================================
+
+    # Load dim_file
+    for file_path, file_info in files_seen.items():
+        existing = conn.execute(
+            "SELECT 1 FROM dim_file WHERE file_key = ?", [file_info["file_key"]]
+        ).fetchone()
+        if not existing:
+            conn.execute(
+                """INSERT INTO dim_file
+                   (file_key, file_path, file_name, file_extension, directory_path)
+                   VALUES (?, ?, ?, ?, ?)""",
+                [
+                    file_info["file_key"],
+                    file_info["file_path"],
+                    file_info["file_name"],
+                    file_info["file_extension"],
+                    file_info["directory_path"],
+                ],
+            )
+
+    # Load dim_programming_language
+    for language in languages_seen:
+        lang_key = generate_dimension_key(language)
+        existing = conn.execute(
+            "SELECT 1 FROM dim_programming_language WHERE language_key = ?", [lang_key]
+        ).fetchone()
+        if not existing:
+            # Get file extensions for this language
+            extensions = LANGUAGE_EXTENSIONS.get(language, [])
+            ext_str = ",".join(extensions) if extensions else ""
+            conn.execute(
+                """INSERT INTO dim_programming_language
+                   (language_key, language_name, file_extensions)
+                   VALUES (?, ?, ?)""",
+                [lang_key, language, ext_str],
+            )
+
+    # Load dim_error_type (just tool_error for now)
+    error_type_key = generate_dimension_key("tool_error")
+    existing = conn.execute(
+        "SELECT 1 FROM dim_error_type WHERE error_type_key = ?", [error_type_key]
+    ).fetchone()
+    if not existing:
+        conn.execute(
+            """INSERT INTO dim_error_type
+               (error_type_key, error_type, error_category)
+               VALUES (?, ?, ?)""",
+            [error_type_key, "tool_error", "execution"],
+        )
+
+    # Load fact_file_operations
+    for fop in file_operations_data:
+        conn.execute(
+            """INSERT INTO fact_file_operations
+               (file_operation_id, tool_call_id, session_key, file_key, tool_key,
+                date_key, time_key, operation_type, file_size_chars, timestamp)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            [
+                fop["file_operation_id"],
+                fop["tool_call_id"],
+                fop["session_key"],
+                fop["file_key"],
+                fop["tool_key"],
+                fop["date_key"],
+                fop["time_key"],
+                fop["operation_type"],
+                fop["file_size_chars"],
+                fop["timestamp"],
+            ],
+        )
+
+    # Load fact_code_blocks
+    for cb in code_blocks_data:
+        conn.execute(
+            """INSERT INTO fact_code_blocks
+               (code_block_id, message_id, session_key, language_key,
+                date_key, time_key, block_index, line_count, char_count, code_text)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            [
+                cb["code_block_id"],
+                cb["message_id"],
+                cb["session_key"],
+                cb["language_key"],
+                cb["date_key"],
+                cb["time_key"],
+                cb["block_index"],
+                cb["line_count"],
+                cb["char_count"],
+                cb["code_text"],
+            ],
+        )
+
+    # Load fact_errors
+    for err in errors_data:
+        conn.execute(
+            """INSERT INTO fact_errors
+               (error_id, tool_call_id, session_key, tool_key, error_type_key,
+                date_key, time_key, error_message, timestamp)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            [
+                err["error_id"],
+                err["tool_call_id"],
+                err["session_key"],
+                err["tool_key"],
+                err["error_type_key"],
+                err["date_key"],
+                err["time_key"],
+                err["error_message"],
+                err["timestamp"],
+            ],
+        )
 
 
 def parse_session_file(filepath):

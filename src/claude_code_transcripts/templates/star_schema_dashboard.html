@@ -1,0 +1,1330 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Claude Code Analytics Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/duckdb@1.0.0/dist/duckdb-browser.mjs" type="module"></script>
+    <style>
+        .tab-active { border-bottom: 2px solid #6366f1; color: #6366f1; }
+        .card { @apply bg-white rounded-lg shadow-md p-4; }
+        .schema-table { @apply border border-gray-300 rounded-lg overflow-hidden; }
+        .schema-header { @apply bg-indigo-600 text-white px-3 py-2 font-semibold text-sm; }
+        .schema-row { @apply px-3 py-1 text-xs border-b border-gray-200 flex justify-between; }
+        .schema-row:last-child { @apply border-b-0; }
+        .dim-table { @apply bg-blue-50; }
+        .fact-table { @apply bg-green-50; }
+        .connector { stroke: #9ca3af; stroke-width: 1.5; fill: none; }
+        pre { @apply bg-gray-900 text-green-400 p-4 rounded-lg overflow-x-auto text-sm; }
+        .loader { @apply animate-spin h-8 w-8 border-4 border-indigo-600 border-t-transparent rounded-full; }
+        .filter-chip { @apply inline-flex items-center px-3 py-1 rounded-full text-sm bg-indigo-100 text-indigo-800 mr-2 mb-2; }
+        .filter-chip-remove { @apply ml-2 cursor-pointer hover:text-indigo-600; }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen">
+    <!-- Header -->
+    <header class="bg-indigo-700 text-white shadow-lg">
+        <div class="max-w-7xl mx-auto px-4 py-4">
+            <div class="flex items-center justify-between">
+                <div>
+                    <h1 class="text-2xl font-bold">Claude Code Analytics</h1>
+                    <p class="text-indigo-200 text-sm">Star Schema Dashboard</p>
+                </div>
+                <div class="flex items-center gap-4">
+                    <div id="db-status" class="flex items-center gap-2">
+                        <span class="h-3 w-3 rounded-full bg-yellow-400"></span>
+                        <span class="text-sm">Loading...</span>
+                    </div>
+                    <label class="bg-indigo-600 hover:bg-indigo-500 px-4 py-2 rounded-lg cursor-pointer transition">
+                        <span>Load Database</span>
+                        <input type="file" id="db-file-input" accept=".duckdb" class="hidden">
+                    </label>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- Navigation Tabs -->
+    <nav class="bg-white shadow">
+        <div class="max-w-7xl mx-auto px-4">
+            <div class="flex space-x-8">
+                <button onclick="showTab('model')" id="tab-model" class="tab-btn py-4 px-2 font-medium text-gray-600 hover:text-indigo-600 tab-active">
+                    Data Model
+                </button>
+                <button onclick="showTab('tables')" id="tab-tables" class="tab-btn py-4 px-2 font-medium text-gray-600 hover:text-indigo-600">
+                    Tables
+                </button>
+                <button onclick="showTab('analytics')" id="tab-analytics" class="tab-btn py-4 px-2 font-medium text-gray-600 hover:text-indigo-600">
+                    Analytics
+                </button>
+                <button onclick="showTab('query')" id="tab-query" class="tab-btn py-4 px-2 font-medium text-gray-600 hover:text-indigo-600">
+                    SQL Query
+                </button>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <main class="max-w-7xl mx-auto px-4 py-6">
+        <!-- Data Model Tab -->
+        <div id="content-model" class="tab-content">
+            <div class="bg-white rounded-lg shadow-md p-6">
+                <h2 class="text-xl font-bold text-gray-800 mb-4">Star Schema Data Model</h2>
+                <p class="text-gray-600 mb-6">This dimensional model enables efficient analytical queries across Claude Code transcripts.</p>
+
+                <div class="relative" style="min-height: 900px;">
+                    <!-- SVG for connectors -->
+                    <svg class="absolute inset-0 w-full h-full pointer-events-none" style="z-index: 0;">
+                        <!-- Lines will be drawn dynamically -->
+                    </svg>
+
+                    <!-- Schema Diagram -->
+                    <div class="grid grid-cols-4 gap-6 relative" style="z-index: 1;">
+                        <!-- Row 1: Date, Time dimensions -->
+                        <div class="col-start-2">
+                            <div class="schema-table dim-table" id="schema-dim-date">
+                                <div class="schema-header">dim_date</div>
+                                <div class="schema-row"><span>date_key</span><span class="text-gray-500">INT PK</span></div>
+                                <div class="schema-row"><span>full_date</span><span class="text-gray-500">DATE</span></div>
+                                <div class="schema-row"><span>year, month, day</span><span class="text-gray-500">INT</span></div>
+                                <div class="schema-row"><span>day_name</span><span class="text-gray-500">VARCHAR</span></div>
+                                <div class="schema-row"><span>is_weekend</span><span class="text-gray-500">BOOL</span></div>
+                            </div>
+                        </div>
+                        <div>
+                            <div class="schema-table dim-table" id="schema-dim-time">
+                                <div class="schema-header">dim_time</div>
+                                <div class="schema-row"><span>time_key</span><span class="text-gray-500">INT PK</span></div>
+                                <div class="schema-row"><span>hour, minute</span><span class="text-gray-500">INT</span></div>
+                                <div class="schema-row"><span>time_of_day</span><span class="text-gray-500">VARCHAR</span></div>
+                            </div>
+                        </div>
+
+                        <!-- Row 2: Tool, Model dimensions -->
+                        <div>
+                            <div class="schema-table dim-table" id="schema-dim-tool">
+                                <div class="schema-header">dim_tool</div>
+                                <div class="schema-row"><span>tool_key</span><span class="text-gray-500">VARCHAR PK</span></div>
+                                <div class="schema-row"><span>tool_name</span><span class="text-gray-500">VARCHAR</span></div>
+                                <div class="schema-row"><span>tool_category</span><span class="text-gray-500">VARCHAR</span></div>
+                            </div>
+                        </div>
+                        <div class="col-span-2"></div>
+                        <div>
+                            <div class="schema-table dim-table" id="schema-dim-model">
+                                <div class="schema-header">dim_model</div>
+                                <div class="schema-row"><span>model_key</span><span class="text-gray-500">VARCHAR PK</span></div>
+                                <div class="schema-row"><span>model_name</span><span class="text-gray-500">VARCHAR</span></div>
+                                <div class="schema-row"><span>model_family</span><span class="text-gray-500">VARCHAR</span></div>
+                            </div>
+                        </div>
+
+                        <!-- Row 3: Main Fact Tables -->
+                        <div>
+                            <div class="schema-table dim-table" id="schema-dim-session">
+                                <div class="schema-header">dim_session</div>
+                                <div class="schema-row"><span>session_key</span><span class="text-gray-500">VARCHAR PK</span></div>
+                                <div class="schema-row"><span>session_id</span><span class="text-gray-500">VARCHAR</span></div>
+                                <div class="schema-row"><span>project_key</span><span class="text-gray-500">VARCHAR FK</span></div>
+                                <div class="schema-row"><span>cwd, git_branch</span><span class="text-gray-500">VARCHAR</span></div>
+                            </div>
+                        </div>
+                        <div class="col-span-2">
+                            <div class="schema-table fact-table border-2 border-green-500" id="schema-fact-messages">
+                                <div class="schema-header bg-green-600">fact_messages</div>
+                                <div class="schema-row"><span>message_id</span><span class="text-gray-500">VARCHAR</span></div>
+                                <div class="schema-row"><span>session_key</span><span class="text-gray-500">VARCHAR FK</span></div>
+                                <div class="schema-row"><span>project_key</span><span class="text-gray-500">VARCHAR FK</span></div>
+                                <div class="schema-row"><span>message_type_key</span><span class="text-gray-500">VARCHAR FK</span></div>
+                                <div class="schema-row"><span>model_key</span><span class="text-gray-500">VARCHAR FK</span></div>
+                                <div class="schema-row"><span>date_key, time_key</span><span class="text-gray-500">INT FK</span></div>
+                                <div class="schema-row"><span>content_length</span><span class="text-gray-500">INT</span></div>
+                                <div class="schema-row"><span>has_tool_use/result/thinking</span><span class="text-gray-500">BOOL</span></div>
+                            </div>
+                        </div>
+                        <div>
+                            <div class="schema-table dim-table" id="schema-dim-msg-type">
+                                <div class="schema-header">dim_message_type</div>
+                                <div class="schema-row"><span>message_type_key</span><span class="text-gray-500">VARCHAR PK</span></div>
+                                <div class="schema-row"><span>message_type</span><span class="text-gray-500">VARCHAR</span></div>
+                            </div>
+                        </div>
+
+                        <!-- Row 4: Secondary Fact Tables -->
+                        <div>
+                            <div class="schema-table dim-table" id="schema-dim-project">
+                                <div class="schema-header">dim_project</div>
+                                <div class="schema-row"><span>project_key</span><span class="text-gray-500">VARCHAR PK</span></div>
+                                <div class="schema-row"><span>project_path</span><span class="text-gray-500">VARCHAR</span></div>
+                                <div class="schema-row"><span>project_name</span><span class="text-gray-500">VARCHAR</span></div>
+                            </div>
+                        </div>
+                        <div>
+                            <div class="schema-table fact-table border-2 border-green-500" id="schema-fact-tool-calls">
+                                <div class="schema-header bg-green-600">fact_tool_calls</div>
+                                <div class="schema-row"><span>tool_call_id</span><span class="text-gray-500">VARCHAR</span></div>
+                                <div class="schema-row"><span>session_key, tool_key</span><span class="text-gray-500">VARCHAR FK</span></div>
+                                <div class="schema-row"><span>date_key, time_key</span><span class="text-gray-500">INT FK</span></div>
+                                <div class="schema-row"><span>input/output_char_count</span><span class="text-gray-500">INT</span></div>
+                                <div class="schema-row"><span>is_error</span><span class="text-gray-500">BOOL</span></div>
+                            </div>
+                        </div>
+                        <div>
+                            <div class="schema-table fact-table border-2 border-green-500" id="schema-fact-content">
+                                <div class="schema-header bg-green-600">fact_content_blocks</div>
+                                <div class="schema-row"><span>content_block_id</span><span class="text-gray-500">VARCHAR</span></div>
+                                <div class="schema-row"><span>message_id</span><span class="text-gray-500">VARCHAR FK</span></div>
+                                <div class="schema-row"><span>content_block_type_key</span><span class="text-gray-500">VARCHAR FK</span></div>
+                                <div class="schema-row"><span>block_index</span><span class="text-gray-500">INT</span></div>
+                                <div class="schema-row"><span>content_length</span><span class="text-gray-500">INT</span></div>
+                            </div>
+                        </div>
+                        <div>
+                            <div class="schema-table dim-table" id="schema-dim-block-type">
+                                <div class="schema-header">dim_content_block_type</div>
+                                <div class="schema-row"><span>content_block_type_key</span><span class="text-gray-500">VARCHAR PK</span></div>
+                                <div class="schema-row"><span>block_type</span><span class="text-gray-500">VARCHAR</span></div>
+                            </div>
+                        </div>
+
+                        <!-- Row 5: Session Summary and Enhanced Facts -->
+                        <div>
+                            <div class="schema-table fact-table border-2 border-green-500" id="schema-fact-summary">
+                                <div class="schema-header bg-green-600">fact_session_summary</div>
+                                <div class="schema-row"><span>session_key, project_key</span><span class="text-gray-500">VARCHAR FK</span></div>
+                                <div class="schema-row"><span>date_key</span><span class="text-gray-500">INT FK</span></div>
+                                <div class="schema-row"><span>total/user/assistant_messages</span><span class="text-gray-500">INT</span></div>
+                                <div class="schema-row"><span>total_tool_calls</span><span class="text-gray-500">INT</span></div>
+                                <div class="schema-row"><span>session_duration_seconds</span><span class="text-gray-500">INT</span></div>
+                            </div>
+                        </div>
+                        <div>
+                            <div class="schema-table fact-table border-2 border-green-500" id="schema-fact-file-ops">
+                                <div class="schema-header bg-green-600">fact_file_operations</div>
+                                <div class="schema-row"><span>file_operation_id</span><span class="text-gray-500">VARCHAR</span></div>
+                                <div class="schema-row"><span>tool_call_id, file_key</span><span class="text-gray-500">VARCHAR FK</span></div>
+                                <div class="schema-row"><span>operation_type</span><span class="text-gray-500">VARCHAR</span></div>
+                                <div class="schema-row"><span>file_size_chars</span><span class="text-gray-500">INT</span></div>
+                            </div>
+                        </div>
+                        <div>
+                            <div class="schema-table fact-table border-2 border-green-500" id="schema-fact-code">
+                                <div class="schema-header bg-green-600">fact_code_blocks</div>
+                                <div class="schema-row"><span>code_block_id</span><span class="text-gray-500">VARCHAR</span></div>
+                                <div class="schema-row"><span>message_id, language_key</span><span class="text-gray-500">VARCHAR FK</span></div>
+                                <div class="schema-row"><span>line_count, char_count</span><span class="text-gray-500">INT</span></div>
+                            </div>
+                        </div>
+                        <div>
+                            <div class="schema-table fact-table border-2 border-green-500" id="schema-fact-errors">
+                                <div class="schema-header bg-green-600">fact_errors</div>
+                                <div class="schema-row"><span>error_id</span><span class="text-gray-500">VARCHAR</span></div>
+                                <div class="schema-row"><span>tool_call_id, error_type_key</span><span class="text-gray-500">VARCHAR FK</span></div>
+                                <div class="schema-row"><span>error_message</span><span class="text-gray-500">TEXT</span></div>
+                            </div>
+                        </div>
+
+                        <!-- Row 6: Enhanced Dimensions -->
+                        <div>
+                            <div class="schema-table dim-table" id="schema-dim-file">
+                                <div class="schema-header">dim_file</div>
+                                <div class="schema-row"><span>file_key</span><span class="text-gray-500">VARCHAR PK</span></div>
+                                <div class="schema-row"><span>file_path</span><span class="text-gray-500">VARCHAR</span></div>
+                                <div class="schema-row"><span>file_name, file_extension</span><span class="text-gray-500">VARCHAR</span></div>
+                                <div class="schema-row"><span>directory_path</span><span class="text-gray-500">VARCHAR</span></div>
+                            </div>
+                        </div>
+                        <div>
+                            <div class="schema-table dim-table" id="schema-dim-language">
+                                <div class="schema-header">dim_programming_language</div>
+                                <div class="schema-row"><span>language_key</span><span class="text-gray-500">VARCHAR PK</span></div>
+                                <div class="schema-row"><span>language_name</span><span class="text-gray-500">VARCHAR</span></div>
+                                <div class="schema-row"><span>file_extensions</span><span class="text-gray-500">VARCHAR</span></div>
+                            </div>
+                        </div>
+                        <div>
+                            <div class="schema-table dim-table" id="schema-dim-error-type">
+                                <div class="schema-header">dim_error_type</div>
+                                <div class="schema-row"><span>error_type_key</span><span class="text-gray-500">VARCHAR PK</span></div>
+                                <div class="schema-row"><span>error_type</span><span class="text-gray-500">VARCHAR</span></div>
+                                <div class="schema-row"><span>error_category</span><span class="text-gray-500">VARCHAR</span></div>
+                            </div>
+                        </div>
+                        <div></div>
+                    </div>
+                </div>
+
+                <!-- Legend -->
+                <div class="flex gap-6 mt-6 pt-4 border-t">
+                    <div class="flex items-center gap-2">
+                        <div class="w-4 h-4 bg-blue-50 border border-blue-300 rounded"></div>
+                        <span class="text-sm text-gray-600">Dimension Table</span>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <div class="w-4 h-4 bg-green-50 border-2 border-green-500 rounded"></div>
+                        <span class="text-sm text-gray-600">Fact Table</span>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <span class="text-xs text-gray-500">PK = Primary Key (hash-based)</span>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <span class="text-xs text-gray-500">FK = Foreign Key (soft reference)</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tables Tab -->
+        <div id="content-tables" class="tab-content hidden">
+            <div class="grid grid-cols-4 gap-4 mb-6">
+                <!-- Table List -->
+                <div class="bg-white rounded-lg shadow-md p-4">
+                    <h3 class="font-bold text-gray-800 mb-3">Tables</h3>
+                    <div class="space-y-1" id="table-list">
+                        <div class="text-gray-500 text-sm">Load a database to view tables</div>
+                    </div>
+                </div>
+
+                <!-- Table View -->
+                <div class="col-span-3 bg-white rounded-lg shadow-md p-4">
+                    <div class="flex justify-between items-center mb-4">
+                        <h3 class="font-bold text-gray-800" id="selected-table-name">Select a table</h3>
+                        <div class="flex items-center gap-2">
+                            <span class="text-sm text-gray-500" id="table-row-count"></span>
+                            <button onclick="exportTableCSV()" class="text-sm text-indigo-600 hover:text-indigo-800">Export CSV</button>
+                        </div>
+                    </div>
+                    <div class="overflow-x-auto">
+                        <table class="min-w-full divide-y divide-gray-200" id="data-table">
+                            <thead class="bg-gray-50">
+                                <tr id="table-header"></tr>
+                            </thead>
+                            <tbody class="bg-white divide-y divide-gray-200" id="table-body"></tbody>
+                        </table>
+                    </div>
+                    <div class="flex justify-between items-center mt-4">
+                        <div class="flex gap-2">
+                            <button onclick="prevPage()" class="px-3 py-1 border rounded text-sm hover:bg-gray-50" id="prev-btn" disabled>Previous</button>
+                            <button onclick="nextPage()" class="px-3 py-1 border rounded text-sm hover:bg-gray-50" id="next-btn" disabled>Next</button>
+                        </div>
+                        <span class="text-sm text-gray-500" id="page-info"></span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Analytics Tab -->
+        <div id="content-analytics" class="tab-content hidden">
+            <!-- Filters -->
+            <div class="bg-white rounded-lg shadow-md p-4 mb-6">
+                <h3 class="font-bold text-gray-800 mb-3">Filters</h3>
+                <div class="grid grid-cols-4 gap-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Project</label>
+                        <select id="filter-project" class="w-full border rounded-lg px-3 py-2" onchange="applyFilters()">
+                            <option value="">All Projects</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Model Family</label>
+                        <select id="filter-model" class="w-full border rounded-lg px-3 py-2" onchange="applyFilters()">
+                            <option value="">All Models</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Tool Category</label>
+                        <select id="filter-tool-category" class="w-full border rounded-lg px-3 py-2" onchange="applyFilters()">
+                            <option value="">All Categories</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Time of Day</label>
+                        <select id="filter-time-of-day" class="w-full border rounded-lg px-3 py-2" onchange="applyFilters()">
+                            <option value="">All Times</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="mt-3" id="active-filters"></div>
+            </div>
+
+            <!-- KPI Cards Row 1 -->
+            <div class="grid grid-cols-4 gap-4 mb-4">
+                <div class="bg-white rounded-lg shadow-md p-4">
+                    <div class="text-sm text-gray-500">Total Sessions</div>
+                    <div class="text-3xl font-bold text-indigo-600" id="kpi-sessions">-</div>
+                </div>
+                <div class="bg-white rounded-lg shadow-md p-4">
+                    <div class="text-sm text-gray-500">Total Messages</div>
+                    <div class="text-3xl font-bold text-green-600" id="kpi-messages">-</div>
+                </div>
+                <div class="bg-white rounded-lg shadow-md p-4">
+                    <div class="text-sm text-gray-500">Tool Calls</div>
+                    <div class="text-3xl font-bold text-blue-600" id="kpi-tools">-</div>
+                </div>
+                <div class="bg-white rounded-lg shadow-md p-4">
+                    <div class="text-sm text-gray-500">Avg Session Duration</div>
+                    <div class="text-3xl font-bold text-purple-600" id="kpi-duration">-</div>
+                </div>
+            </div>
+
+            <!-- KPI Cards Row 2 (Enhanced) -->
+            <div class="grid grid-cols-4 gap-4 mb-6">
+                <div class="bg-white rounded-lg shadow-md p-4">
+                    <div class="text-sm text-gray-500">Files Touched</div>
+                    <div class="text-3xl font-bold text-orange-600" id="kpi-files">-</div>
+                </div>
+                <div class="bg-white rounded-lg shadow-md p-4">
+                    <div class="text-sm text-gray-500">Code Blocks</div>
+                    <div class="text-3xl font-bold text-cyan-600" id="kpi-code-blocks">-</div>
+                </div>
+                <div class="bg-white rounded-lg shadow-md p-4">
+                    <div class="text-sm text-gray-500">Est. Tokens</div>
+                    <div class="text-3xl font-bold text-pink-600" id="kpi-tokens">-</div>
+                </div>
+                <div class="bg-white rounded-lg shadow-md p-4">
+                    <div class="text-sm text-gray-500">Error Rate</div>
+                    <div class="text-3xl font-bold text-red-600" id="kpi-error-rate">-</div>
+                </div>
+            </div>
+
+            <!-- Charts Row 1 -->
+            <div class="grid grid-cols-2 gap-6 mb-6">
+                <div class="bg-white rounded-lg shadow-md p-4">
+                    <h3 class="font-bold text-gray-800 mb-4">Tool Usage by Category</h3>
+                    <canvas id="chart-tool-category" height="200"></canvas>
+                </div>
+                <div class="bg-white rounded-lg shadow-md p-4">
+                    <h3 class="font-bold text-gray-800 mb-4">Messages by Model Family</h3>
+                    <canvas id="chart-model-family" height="200"></canvas>
+                </div>
+            </div>
+
+            <!-- Charts Row 2 -->
+            <div class="grid grid-cols-2 gap-6 mb-6">
+                <div class="bg-white rounded-lg shadow-md p-4">
+                    <h3 class="font-bold text-gray-800 mb-4">Activity by Time of Day</h3>
+                    <canvas id="chart-time-of-day" height="200"></canvas>
+                </div>
+                <div class="bg-white rounded-lg shadow-md p-4">
+                    <h3 class="font-bold text-gray-800 mb-4">Content Block Distribution</h3>
+                    <canvas id="chart-content-blocks" height="200"></canvas>
+                </div>
+            </div>
+
+            <!-- Charts Row 3 -->
+            <div class="grid grid-cols-2 gap-6 mb-6">
+                <div class="bg-white rounded-lg shadow-md p-4">
+                    <h3 class="font-bold text-gray-800 mb-4">File Operations by Type</h3>
+                    <canvas id="chart-file-operations" height="200"></canvas>
+                </div>
+                <div class="bg-white rounded-lg shadow-md p-4">
+                    <h3 class="font-bold text-gray-800 mb-4">Code Blocks by Language</h3>
+                    <canvas id="chart-code-languages" height="200"></canvas>
+                </div>
+            </div>
+
+            <!-- Charts Row 4 -->
+            <div class="grid grid-cols-1 gap-6 mb-6">
+                <div class="bg-white rounded-lg shadow-md p-4">
+                    <h3 class="font-bold text-gray-800 mb-4">Daily Activity</h3>
+                    <canvas id="chart-daily-activity" height="100"></canvas>
+                </div>
+            </div>
+
+            <!-- Top Tools Table -->
+            <div class="bg-white rounded-lg shadow-md p-4">
+                <h3 class="font-bold text-gray-800 mb-4">Top Tools</h3>
+                <table class="min-w-full divide-y divide-gray-200">
+                    <thead class="bg-gray-50">
+                        <tr>
+                            <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Tool</th>
+                            <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Category</th>
+                            <th class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase">Usage Count</th>
+                            <th class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase">Avg Input Size</th>
+                            <th class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase">Avg Output Size</th>
+                            <th class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase">Error Rate</th>
+                        </tr>
+                    </thead>
+                    <tbody class="bg-white divide-y divide-gray-200" id="top-tools-body"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- SQL Query Tab -->
+        <div id="content-query" class="tab-content hidden">
+            <div class="bg-white rounded-lg shadow-md p-4 mb-6">
+                <h3 class="font-bold text-gray-800 mb-3">SQL Query Editor</h3>
+                <textarea id="sql-input" class="w-full h-40 font-mono text-sm border rounded-lg p-3 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500" placeholder="SELECT * FROM fact_messages LIMIT 10;">SELECT
+    dp.project_name,
+    dm.model_family,
+    COUNT(*) as message_count,
+    SUM(CASE WHEN fm.has_tool_use THEN 1 ELSE 0 END) as tool_uses
+FROM fact_messages fm
+JOIN dim_project dp ON fm.project_key = dp.project_key
+LEFT JOIN dim_model dm ON fm.model_key = dm.model_key
+GROUP BY dp.project_name, dm.model_family
+ORDER BY message_count DESC
+LIMIT 20;</textarea>
+                <div class="flex justify-between items-center mt-3">
+                    <div class="flex gap-2">
+                        <button onclick="runQuery()" class="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg transition">
+                            Run Query (Ctrl+Enter)
+                        </button>
+                        <button onclick="clearQuery()" class="border px-4 py-2 rounded-lg hover:bg-gray-50 transition">
+                            Clear
+                        </button>
+                    </div>
+                    <div class="flex gap-2">
+                        <select id="query-templates" class="border rounded-lg px-3 py-2" onchange="loadQueryTemplate()">
+                            <option value="">Load Template...</option>
+                            <option value="tool-usage">Tool Usage by Category</option>
+                            <option value="model-usage">Messages by Model</option>
+                            <option value="daily-activity">Daily Activity</option>
+                            <option value="session-metrics">Session Metrics</option>
+                            <option value="content-blocks">Content Block Analysis</option>
+                            <option value="time-analysis">Time of Day Analysis</option>
+                            <option value="file-operations">File Operations Analysis</option>
+                            <option value="code-languages">Code by Language</option>
+                            <option value="error-analysis">Error Analysis</option>
+                            <option value="token-analysis">Token Analysis</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <div class="bg-white rounded-lg shadow-md p-4">
+                <div class="flex justify-between items-center mb-3">
+                    <h3 class="font-bold text-gray-800">Results</h3>
+                    <div class="flex items-center gap-4">
+                        <span class="text-sm text-gray-500" id="query-time"></span>
+                        <button onclick="exportQueryCSV()" class="text-sm text-indigo-600 hover:text-indigo-800">Export CSV</button>
+                    </div>
+                </div>
+                <div class="overflow-x-auto max-h-96">
+                    <table class="min-w-full divide-y divide-gray-200" id="query-results-table">
+                        <thead class="bg-gray-50 sticky top-0">
+                            <tr id="query-results-header"></tr>
+                        </thead>
+                        <tbody class="bg-white divide-y divide-gray-200" id="query-results-body"></tbody>
+                    </table>
+                </div>
+                <div id="query-error" class="hidden mt-4 p-4 bg-red-50 border border-red-200 rounded-lg text-red-700"></div>
+            </div>
+        </div>
+
+        <!-- Loading Overlay -->
+        <div id="loading-overlay" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+            <div class="bg-white rounded-lg p-6 flex flex-col items-center">
+                <div class="loader mb-4"></div>
+                <span class="text-gray-600">Loading...</span>
+            </div>
+        </div>
+    </main>
+
+    <script type="module">
+        // DuckDB-WASM initialization
+        import * as duckdb from 'https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.28.0/+esm';
+
+        let db = null;
+        let conn = null;
+        let currentTable = null;
+        let currentPage = 0;
+        const pageSize = 50;
+        let lastQueryResults = null;
+        let charts = {};
+
+        // Initialize DuckDB
+        async function initDuckDB() {
+            const JSDELIVR_BUNDLES = duckdb.getJsDelivrBundles();
+            const bundle = await duckdb.selectBundle(JSDELIVR_BUNDLES);
+            const worker_url = URL.createObjectURL(
+                new Blob([`importScripts("${bundle.mainWorker}");`], {type: 'text/javascript'})
+            );
+            const worker = new Worker(worker_url);
+            const logger = new duckdb.ConsoleLogger();
+            db = new duckdb.AsyncDuckDB(logger, worker);
+            await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
+            URL.revokeObjectURL(worker_url);
+            updateStatus('Ready', 'green');
+        }
+
+        // Update connection status
+        function updateStatus(text, color) {
+            const status = document.getElementById('db-status');
+            const colors = { green: 'bg-green-400', yellow: 'bg-yellow-400', red: 'bg-red-400' };
+            status.innerHTML = `<span class="h-3 w-3 rounded-full ${colors[color]}"></span><span class="text-sm">${text}</span>`;
+        }
+
+        // Load database file
+        async function loadDatabase(file) {
+            showLoading(true);
+            try {
+                const arrayBuffer = await file.arrayBuffer();
+                await db.registerFileBuffer(file.name, new Uint8Array(arrayBuffer));
+                conn = await db.connect();
+                await conn.query(`ATTACH '${file.name}' AS loaded_db`);
+
+                // Use the attached database
+                await conn.query('USE loaded_db');
+
+                updateStatus('Connected: ' + file.name, 'green');
+                await refreshTableList();
+                await loadFilters();
+                await refreshAnalytics();
+            } catch (error) {
+                console.error('Error loading database:', error);
+                updateStatus('Error: ' + error.message, 'red');
+            }
+            showLoading(false);
+        }
+
+        // Refresh table list
+        async function refreshTableList() {
+            if (!conn) return;
+
+            const result = await conn.query("SELECT table_name FROM information_schema.tables WHERE table_schema = 'main' ORDER BY table_name");
+            const tables = result.toArray().map(row => row.table_name);
+
+            const tableList = document.getElementById('table-list');
+            tableList.innerHTML = tables.map(table => {
+                const isDim = table.startsWith('dim_');
+                const isFact = table.startsWith('fact_');
+                const isStg = table.startsWith('stg_');
+                const bgClass = isDim ? 'bg-blue-50 hover:bg-blue-100' :
+                               isFact ? 'bg-green-50 hover:bg-green-100' :
+                               isStg ? 'bg-yellow-50 hover:bg-yellow-100' : 'hover:bg-gray-50';
+                return `<button onclick="window.selectTable('${table}')" class="w-full text-left px-3 py-2 rounded text-sm ${bgClass} transition">${table}</button>`;
+            }).join('');
+        }
+
+        // Select and display table
+        window.selectTable = async function(tableName) {
+            if (!conn) return;
+
+            currentTable = tableName;
+            currentPage = 0;
+
+            document.getElementById('selected-table-name').textContent = tableName;
+
+            // Get row count
+            const countResult = await conn.query(`SELECT COUNT(*) as cnt FROM ${tableName}`);
+            const rowCount = Number(countResult.toArray()[0].cnt);
+            document.getElementById('table-row-count').textContent = `${rowCount.toLocaleString()} rows`;
+
+            await loadTablePage();
+        };
+
+        // Load table page
+        async function loadTablePage() {
+            if (!conn || !currentTable) return;
+
+            const offset = currentPage * pageSize;
+            const result = await conn.query(`SELECT * FROM ${currentTable} LIMIT ${pageSize} OFFSET ${offset}`);
+            const data = result.toArray();
+            const columns = result.schema.fields.map(f => f.name);
+
+            // Header
+            const header = document.getElementById('table-header');
+            header.innerHTML = columns.map(col =>
+                `<th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">${col}</th>`
+            ).join('');
+
+            // Body
+            const body = document.getElementById('table-body');
+            body.innerHTML = data.map(row =>
+                `<tr class="hover:bg-gray-50">${columns.map(col => {
+                    let val = row[col];
+                    if (val === null) val = '<span class="text-gray-400">NULL</span>';
+                    else if (typeof val === 'object') val = '<span class="text-gray-400">[JSON]</span>';
+                    else if (typeof val === 'string' && val.length > 50) val = val.substring(0, 50) + '...';
+                    return `<td class="px-4 py-2 text-sm text-gray-900 whitespace-nowrap">${val}</td>`;
+                }).join('')}</tr>`
+            ).join('');
+
+            // Pagination
+            const countResult = await conn.query(`SELECT COUNT(*) as cnt FROM ${currentTable}`);
+            const totalRows = Number(countResult.toArray()[0].cnt);
+            const totalPages = Math.ceil(totalRows / pageSize);
+
+            document.getElementById('prev-btn').disabled = currentPage === 0;
+            document.getElementById('next-btn').disabled = currentPage >= totalPages - 1;
+            document.getElementById('page-info').textContent = `Page ${currentPage + 1} of ${totalPages}`;
+        }
+
+        window.prevPage = function() { currentPage--; loadTablePage(); };
+        window.nextPage = function() { currentPage++; loadTablePage(); };
+
+        // Load filter options
+        async function loadFilters() {
+            if (!conn) return;
+
+            try {
+                // Projects
+                const projects = await conn.query('SELECT DISTINCT project_name FROM dim_project ORDER BY project_name');
+                populateSelect('filter-project', projects.toArray().map(r => r.project_name));
+
+                // Model families
+                const models = await conn.query('SELECT DISTINCT model_family FROM dim_model ORDER BY model_family');
+                populateSelect('filter-model', models.toArray().map(r => r.model_family));
+
+                // Tool categories
+                const categories = await conn.query('SELECT DISTINCT tool_category FROM dim_tool ORDER BY tool_category');
+                populateSelect('filter-tool-category', categories.toArray().map(r => r.tool_category));
+
+                // Time of day
+                const times = await conn.query('SELECT DISTINCT time_of_day FROM dim_time ORDER BY time_of_day');
+                populateSelect('filter-time-of-day', times.toArray().map(r => r.time_of_day));
+            } catch (e) {
+                console.error('Error loading filters:', e);
+            }
+        }
+
+        function populateSelect(id, options) {
+            const select = document.getElementById(id);
+            const firstOption = select.options[0];
+            select.innerHTML = '';
+            select.appendChild(firstOption);
+            options.filter(o => o).forEach(opt => {
+                const option = document.createElement('option');
+                option.value = opt;
+                option.textContent = opt;
+                select.appendChild(option);
+            });
+        }
+
+        // Apply filters and refresh analytics
+        window.applyFilters = async function() {
+            await refreshAnalytics();
+        };
+
+        // Get current filter conditions
+        function getFilterConditions() {
+            const conditions = [];
+            const project = document.getElementById('filter-project').value;
+            const model = document.getElementById('filter-model').value;
+            const category = document.getElementById('filter-tool-category').value;
+            const timeOfDay = document.getElementById('filter-time-of-day').value;
+
+            if (project) conditions.push({ type: 'project', value: project, sql: `dp.project_name = '${project}'` });
+            if (model) conditions.push({ type: 'model', value: model, sql: `dm.model_family = '${model}'` });
+            if (category) conditions.push({ type: 'category', value: category, sql: `dt.tool_category = '${category}'` });
+            if (timeOfDay) conditions.push({ type: 'time', value: timeOfDay, sql: `dtime.time_of_day = '${timeOfDay}'` });
+
+            return conditions;
+        }
+
+        // Refresh all analytics
+        async function refreshAnalytics() {
+            if (!conn) return;
+
+            showLoading(true);
+            try {
+                await refreshKPIs();
+                await refreshEnhancedKPIs();
+                await refreshToolCategoryChart();
+                await refreshModelFamilyChart();
+                await refreshTimeOfDayChart();
+                await refreshContentBlocksChart();
+                await refreshFileOperationsChart();
+                await refreshCodeLanguagesChart();
+                await refreshDailyActivityChart();
+                await refreshTopToolsTable();
+            } catch (e) {
+                console.error('Error refreshing analytics:', e);
+            }
+            showLoading(false);
+        }
+
+        // Refresh KPIs
+        async function refreshKPIs() {
+            const filters = getFilterConditions();
+            let whereClause = filters.length > 0 ? 'WHERE ' + filters.map(f => f.sql).join(' AND ') : '';
+
+            // Adjust joins based on filters
+            let joins = '';
+            if (filters.some(f => f.type === 'project')) joins += ' JOIN dim_project dp ON fss.project_key = dp.project_key';
+
+            try {
+                const sessionsResult = await conn.query(`SELECT COUNT(*) as cnt FROM fact_session_summary fss ${joins} ${whereClause}`);
+                document.getElementById('kpi-sessions').textContent = Number(sessionsResult.toArray()[0].cnt).toLocaleString();
+
+                const messagesResult = await conn.query(`SELECT SUM(total_messages) as cnt FROM fact_session_summary fss ${joins} ${whereClause}`);
+                document.getElementById('kpi-messages').textContent = Number(messagesResult.toArray()[0].cnt || 0).toLocaleString();
+
+                const toolsResult = await conn.query(`SELECT SUM(total_tool_calls) as cnt FROM fact_session_summary fss ${joins} ${whereClause}`);
+                document.getElementById('kpi-tools').textContent = Number(toolsResult.toArray()[0].cnt || 0).toLocaleString();
+
+                const durationResult = await conn.query(`SELECT AVG(session_duration_seconds) as avg_dur FROM fact_session_summary fss ${joins} ${whereClause}`);
+                const avgDur = Number(durationResult.toArray()[0].avg_dur || 0);
+                document.getElementById('kpi-duration').textContent = formatDuration(avgDur);
+            } catch (e) {
+                console.error('Error refreshing KPIs:', e);
+            }
+        }
+
+        function formatDuration(seconds) {
+            if (seconds < 60) return `${Math.round(seconds)}s`;
+            if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
+            return `${Math.round(seconds / 3600)}h`;
+        }
+
+        function formatNumber(num) {
+            if (num >= 1000000) return (num / 1000000).toFixed(1) + 'M';
+            if (num >= 1000) return (num / 1000).toFixed(1) + 'K';
+            return num.toLocaleString();
+        }
+
+        // Refresh Enhanced KPIs
+        async function refreshEnhancedKPIs() {
+            try {
+                // Files touched
+                const filesResult = await conn.query('SELECT COUNT(DISTINCT file_key) as cnt FROM fact_file_operations');
+                document.getElementById('kpi-files').textContent = formatNumber(Number(filesResult.toArray()[0].cnt || 0));
+
+                // Code blocks
+                const codeResult = await conn.query('SELECT COUNT(*) as cnt FROM fact_code_blocks');
+                document.getElementById('kpi-code-blocks').textContent = formatNumber(Number(codeResult.toArray()[0].cnt || 0));
+
+                // Estimated tokens
+                const tokensResult = await conn.query('SELECT SUM(estimated_tokens) as cnt FROM fact_messages');
+                document.getElementById('kpi-tokens').textContent = formatNumber(Number(tokensResult.toArray()[0].cnt || 0));
+
+                // Error rate
+                const errorRateResult = await conn.query(`
+                    SELECT
+                        ROUND(SUM(CASE WHEN is_error THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(*), 0), 1) as rate
+                    FROM fact_tool_calls
+                `);
+                const errorRate = errorRateResult.toArray()[0].rate || 0;
+                document.getElementById('kpi-error-rate').textContent = errorRate + '%';
+            } catch (e) {
+                console.error('Error refreshing enhanced KPIs:', e);
+                // Set defaults if tables don't exist
+                document.getElementById('kpi-files').textContent = '-';
+                document.getElementById('kpi-code-blocks').textContent = '-';
+                document.getElementById('kpi-tokens').textContent = '-';
+                document.getElementById('kpi-error-rate').textContent = '-';
+            }
+        }
+
+        // Chart: File Operations by Type
+        async function refreshFileOperationsChart() {
+            try {
+                const result = await conn.query(`
+                    SELECT operation_type, COUNT(*) as op_count
+                    FROM fact_file_operations
+                    GROUP BY operation_type
+                    ORDER BY op_count DESC
+                `);
+                const data = result.toArray();
+
+                const ctx = document.getElementById('chart-file-operations').getContext('2d');
+                if (charts.fileOperations) charts.fileOperations.destroy();
+
+                charts.fileOperations = new Chart(ctx, {
+                    type: 'doughnut',
+                    data: {
+                        labels: data.map(r => r.operation_type),
+                        datasets: [{
+                            data: data.map(r => Number(r.op_count)),
+                            backgroundColor: ['#f97316', '#22c55e', '#6366f1', '#ef4444', '#8b5cf6', '#06b6d4']
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        plugins: { legend: { position: 'right' } }
+                    }
+                });
+            } catch (e) {
+                console.error('Error refreshing file operations chart:', e);
+            }
+        }
+
+        // Chart: Code Blocks by Language
+        async function refreshCodeLanguagesChart() {
+            try {
+                const result = await conn.query(`
+                    SELECT dpl.language_name, COUNT(*) as block_count, SUM(fcb.line_count) as total_lines
+                    FROM fact_code_blocks fcb
+                    JOIN dim_programming_language dpl ON fcb.language_key = dpl.language_key
+                    GROUP BY dpl.language_name
+                    ORDER BY block_count DESC
+                    LIMIT 10
+                `);
+                const data = result.toArray();
+
+                const ctx = document.getElementById('chart-code-languages').getContext('2d');
+                if (charts.codeLanguages) charts.codeLanguages.destroy();
+
+                charts.codeLanguages = new Chart(ctx, {
+                    type: 'bar',
+                    data: {
+                        labels: data.map(r => r.language_name),
+                        datasets: [{
+                            label: 'Code Blocks',
+                            data: data.map(r => Number(r.block_count)),
+                            backgroundColor: '#06b6d4'
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        plugins: { legend: { display: false } },
+                        scales: { y: { beginAtZero: true } }
+                    }
+                });
+            } catch (e) {
+                console.error('Error refreshing code languages chart:', e);
+            }
+        }
+
+        // Chart: Tool Usage by Category
+        async function refreshToolCategoryChart() {
+            const result = await conn.query(`
+                SELECT dt.tool_category, COUNT(*) as usage_count
+                FROM fact_tool_calls ftc
+                JOIN dim_tool dt ON ftc.tool_key = dt.tool_key
+                GROUP BY dt.tool_category
+                ORDER BY usage_count DESC
+            `);
+            const data = result.toArray();
+
+            const ctx = document.getElementById('chart-tool-category').getContext('2d');
+            if (charts.toolCategory) charts.toolCategory.destroy();
+
+            charts.toolCategory = new Chart(ctx, {
+                type: 'doughnut',
+                data: {
+                    labels: data.map(r => r.tool_category),
+                    datasets: [{
+                        data: data.map(r => Number(r.usage_count)),
+                        backgroundColor: ['#6366f1', '#22c55e', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#ec4899']
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    plugins: { legend: { position: 'right' } }
+                }
+            });
+        }
+
+        // Chart: Messages by Model Family
+        async function refreshModelFamilyChart() {
+            const result = await conn.query(`
+                SELECT COALESCE(dm.model_family, 'user') as model_family, COUNT(*) as msg_count
+                FROM fact_messages fm
+                LEFT JOIN dim_model dm ON fm.model_key = dm.model_key
+                GROUP BY dm.model_family
+                ORDER BY msg_count DESC
+            `);
+            const data = result.toArray();
+
+            const ctx = document.getElementById('chart-model-family').getContext('2d');
+            if (charts.modelFamily) charts.modelFamily.destroy();
+
+            charts.modelFamily = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: data.map(r => r.model_family || 'user'),
+                    datasets: [{
+                        label: 'Messages',
+                        data: data.map(r => Number(r.msg_count)),
+                        backgroundColor: '#6366f1'
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    plugins: { legend: { display: false } },
+                    scales: { y: { beginAtZero: true } }
+                }
+            });
+        }
+
+        // Chart: Activity by Time of Day
+        async function refreshTimeOfDayChart() {
+            const result = await conn.query(`
+                SELECT dt.time_of_day, COUNT(*) as msg_count
+                FROM fact_messages fm
+                JOIN dim_time dt ON fm.time_key = dt.time_key
+                GROUP BY dt.time_of_day
+                ORDER BY CASE dt.time_of_day
+                    WHEN 'morning' THEN 1
+                    WHEN 'afternoon' THEN 2
+                    WHEN 'evening' THEN 3
+                    WHEN 'night' THEN 4 END
+            `);
+            const data = result.toArray();
+
+            const ctx = document.getElementById('chart-time-of-day').getContext('2d');
+            if (charts.timeOfDay) charts.timeOfDay.destroy();
+
+            charts.timeOfDay = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: data.map(r => r.time_of_day),
+                    datasets: [{
+                        label: 'Messages',
+                        data: data.map(r => Number(r.msg_count)),
+                        backgroundColor: ['#fbbf24', '#22c55e', '#f97316', '#6366f1']
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    plugins: { legend: { display: false } },
+                    scales: { y: { beginAtZero: true } }
+                }
+            });
+        }
+
+        // Chart: Content Block Distribution
+        async function refreshContentBlocksChart() {
+            const result = await conn.query(`
+                SELECT dcbt.block_type, COUNT(*) as block_count
+                FROM fact_content_blocks fcb
+                JOIN dim_content_block_type dcbt ON fcb.content_block_type_key = dcbt.content_block_type_key
+                GROUP BY dcbt.block_type
+                ORDER BY block_count DESC
+            `);
+            const data = result.toArray();
+
+            const ctx = document.getElementById('chart-content-blocks').getContext('2d');
+            if (charts.contentBlocks) charts.contentBlocks.destroy();
+
+            charts.contentBlocks = new Chart(ctx, {
+                type: 'pie',
+                data: {
+                    labels: data.map(r => r.block_type),
+                    datasets: [{
+                        data: data.map(r => Number(r.block_count)),
+                        backgroundColor: ['#6366f1', '#22c55e', '#f59e0b', '#ef4444', '#8b5cf6']
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    plugins: { legend: { position: 'right' } }
+                }
+            });
+        }
+
+        // Chart: Daily Activity
+        async function refreshDailyActivityChart() {
+            const result = await conn.query(`
+                SELECT dd.full_date, COUNT(*) as msg_count
+                FROM fact_messages fm
+                JOIN dim_date dd ON fm.date_key = dd.date_key
+                GROUP BY dd.full_date
+                ORDER BY dd.full_date
+                LIMIT 30
+            `);
+            const data = result.toArray();
+
+            const ctx = document.getElementById('chart-daily-activity').getContext('2d');
+            if (charts.dailyActivity) charts.dailyActivity.destroy();
+
+            charts.dailyActivity = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: data.map(r => r.full_date),
+                    datasets: [{
+                        label: 'Messages',
+                        data: data.map(r => Number(r.msg_count)),
+                        borderColor: '#6366f1',
+                        backgroundColor: 'rgba(99, 102, 241, 0.1)',
+                        fill: true,
+                        tension: 0.3
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    plugins: { legend: { display: false } },
+                    scales: {
+                        y: { beginAtZero: true },
+                        x: { display: true }
+                    }
+                }
+            });
+        }
+
+        // Top Tools Table
+        async function refreshTopToolsTable() {
+            const result = await conn.query(`
+                SELECT
+                    dt.tool_name,
+                    dt.tool_category,
+                    COUNT(*) as usage_count,
+                    ROUND(AVG(ftc.input_char_count), 0) as avg_input,
+                    ROUND(AVG(ftc.output_char_count), 0) as avg_output,
+                    ROUND(SUM(CASE WHEN ftc.is_error THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 1) as error_rate
+                FROM fact_tool_calls ftc
+                JOIN dim_tool dt ON ftc.tool_key = dt.tool_key
+                GROUP BY dt.tool_name, dt.tool_category
+                ORDER BY usage_count DESC
+                LIMIT 10
+            `);
+            const data = result.toArray();
+
+            const body = document.getElementById('top-tools-body');
+            body.innerHTML = data.map(row => `
+                <tr class="hover:bg-gray-50">
+                    <td class="px-4 py-2 text-sm font-medium text-gray-900">${row.tool_name}</td>
+                    <td class="px-4 py-2 text-sm text-gray-500">${row.tool_category}</td>
+                    <td class="px-4 py-2 text-sm text-gray-900 text-right">${Number(row.usage_count).toLocaleString()}</td>
+                    <td class="px-4 py-2 text-sm text-gray-500 text-right">${Number(row.avg_input).toLocaleString()}</td>
+                    <td class="px-4 py-2 text-sm text-gray-500 text-right">${Number(row.avg_output).toLocaleString()}</td>
+                    <td class="px-4 py-2 text-sm text-right ${Number(row.error_rate) > 5 ? 'text-red-600' : 'text-gray-500'}">${row.error_rate}%</td>
+                </tr>
+            `).join('');
+        }
+
+        // SQL Query execution
+        window.runQuery = async function() {
+            if (!conn) {
+                alert('Please load a database first');
+                return;
+            }
+
+            const sql = document.getElementById('sql-input').value.trim();
+            if (!sql) return;
+
+            const errorDiv = document.getElementById('query-error');
+            errorDiv.classList.add('hidden');
+
+            const startTime = performance.now();
+
+            try {
+                const result = await conn.query(sql);
+                const endTime = performance.now();
+
+                lastQueryResults = result;
+                const data = result.toArray();
+                const columns = result.schema.fields.map(f => f.name);
+
+                // Header
+                const header = document.getElementById('query-results-header');
+                header.innerHTML = columns.map(col =>
+                    `<th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">${col}</th>`
+                ).join('');
+
+                // Body
+                const body = document.getElementById('query-results-body');
+                body.innerHTML = data.slice(0, 1000).map(row =>
+                    `<tr class="hover:bg-gray-50">${columns.map(col => {
+                        let val = row[col];
+                        if (val === null) val = '<span class="text-gray-400">NULL</span>';
+                        else if (typeof val === 'object') val = JSON.stringify(val).substring(0, 100);
+                        else if (typeof val === 'string' && val.length > 100) val = val.substring(0, 100) + '...';
+                        return `<td class="px-4 py-2 text-sm text-gray-900">${val}</td>`;
+                    }).join('')}</tr>`
+                ).join('');
+
+                document.getElementById('query-time').textContent =
+                    `${data.length} rows in ${(endTime - startTime).toFixed(1)}ms`;
+
+            } catch (error) {
+                errorDiv.textContent = error.message;
+                errorDiv.classList.remove('hidden');
+                document.getElementById('query-time').textContent = '';
+            }
+        };
+
+        window.clearQuery = function() {
+            document.getElementById('sql-input').value = '';
+            document.getElementById('query-results-header').innerHTML = '';
+            document.getElementById('query-results-body').innerHTML = '';
+            document.getElementById('query-time').textContent = '';
+            document.getElementById('query-error').classList.add('hidden');
+        };
+
+        // Query templates
+        const queryTemplates = {
+            'tool-usage': `SELECT
+    dt.tool_category,
+    dt.tool_name,
+    COUNT(*) as usage_count,
+    ROUND(AVG(ftc.input_char_count), 0) as avg_input_size,
+    ROUND(AVG(ftc.output_char_count), 0) as avg_output_size
+FROM fact_tool_calls ftc
+JOIN dim_tool dt ON ftc.tool_key = dt.tool_key
+GROUP BY dt.tool_category, dt.tool_name
+ORDER BY usage_count DESC;`,
+            'model-usage': `SELECT
+    dm.model_family,
+    dm.model_name,
+    COUNT(*) as message_count,
+    SUM(fm.content_length) as total_content_length
+FROM fact_messages fm
+JOIN dim_model dm ON fm.model_key = dm.model_key
+WHERE fm.model_key IS NOT NULL
+GROUP BY dm.model_family, dm.model_name
+ORDER BY message_count DESC;`,
+            'daily-activity': `SELECT
+    dd.full_date,
+    dd.day_name,
+    dd.is_weekend,
+    COUNT(*) as message_count,
+    SUM(CASE WHEN fm.has_tool_use THEN 1 ELSE 0 END) as tool_uses
+FROM fact_messages fm
+JOIN dim_date dd ON fm.date_key = dd.date_key
+GROUP BY dd.full_date, dd.day_name, dd.is_weekend
+ORDER BY dd.full_date DESC
+LIMIT 30;`,
+            'session-metrics': `SELECT
+    dp.project_name,
+    ds.git_branch,
+    fss.total_messages,
+    fss.user_messages,
+    fss.assistant_messages,
+    fss.total_tool_calls,
+    ROUND(fss.session_duration_seconds / 60.0, 1) as duration_minutes
+FROM fact_session_summary fss
+JOIN dim_session ds ON fss.session_key = ds.session_key
+JOIN dim_project dp ON fss.project_key = dp.project_key
+ORDER BY fss.first_timestamp DESC
+LIMIT 20;`,
+            'content-blocks': `SELECT
+    dcbt.block_type,
+    COUNT(*) as block_count,
+    ROUND(AVG(fcb.content_length), 0) as avg_length,
+    MAX(fcb.content_length) as max_length,
+    SUM(fcb.content_length) as total_length
+FROM fact_content_blocks fcb
+JOIN dim_content_block_type dcbt ON fcb.content_block_type_key = dcbt.content_block_type_key
+GROUP BY dcbt.block_type
+ORDER BY block_count DESC;`,
+            'time-analysis': `SELECT
+    dt.time_of_day,
+    dt.hour,
+    COUNT(*) as message_count,
+    SUM(CASE WHEN fm.has_tool_use THEN 1 ELSE 0 END) as tool_uses,
+    ROUND(AVG(fm.content_length), 0) as avg_content_length
+FROM fact_messages fm
+JOIN dim_time dt ON fm.time_key = dt.time_key
+GROUP BY dt.time_of_day, dt.hour
+ORDER BY dt.hour;`,
+            'file-operations': `SELECT
+    df.file_extension,
+    df.directory_path,
+    ffo.operation_type,
+    COUNT(*) as operation_count,
+    ROUND(AVG(ffo.file_size_chars), 0) as avg_file_size
+FROM fact_file_operations ffo
+JOIN dim_file df ON ffo.file_key = df.file_key
+GROUP BY df.file_extension, df.directory_path, ffo.operation_type
+ORDER BY operation_count DESC
+LIMIT 50;`,
+            'code-languages': `SELECT
+    dpl.language_name,
+    COUNT(*) as block_count,
+    SUM(fcb.line_count) as total_lines,
+    ROUND(AVG(fcb.line_count), 1) as avg_lines_per_block,
+    SUM(fcb.char_count) as total_chars
+FROM fact_code_blocks fcb
+JOIN dim_programming_language dpl ON fcb.language_key = dpl.language_key
+GROUP BY dpl.language_name
+ORDER BY block_count DESC;`,
+            'error-analysis': `SELECT
+    dt.tool_name,
+    dt.tool_category,
+    det.error_type,
+    det.error_category,
+    COUNT(*) as error_count
+FROM fact_errors fe
+JOIN dim_tool dt ON fe.tool_key = dt.tool_key
+JOIN dim_error_type det ON fe.error_type_key = det.error_type_key
+GROUP BY dt.tool_name, dt.tool_category, det.error_type, det.error_category
+ORDER BY error_count DESC
+LIMIT 20;`,
+            'token-analysis': `SELECT
+    COALESCE(dm.model_family, 'user') as model_family,
+    dmt.message_type,
+    COUNT(*) as message_count,
+    SUM(fm.word_count) as total_words,
+    SUM(fm.estimated_tokens) as total_tokens,
+    ROUND(AVG(fm.estimated_tokens), 0) as avg_tokens_per_message
+FROM fact_messages fm
+LEFT JOIN dim_model dm ON fm.model_key = dm.model_key
+JOIN dim_message_type dmt ON fm.message_type_key = dmt.message_type_key
+GROUP BY dm.model_family, dmt.message_type
+ORDER BY total_tokens DESC;`
+        };
+
+        window.loadQueryTemplate = function() {
+            const select = document.getElementById('query-templates');
+            const template = queryTemplates[select.value];
+            if (template) {
+                document.getElementById('sql-input').value = template;
+            }
+            select.value = '';
+        };
+
+        // Export functions
+        window.exportTableCSV = async function() {
+            if (!conn || !currentTable) return;
+            const result = await conn.query(`SELECT * FROM ${currentTable}`);
+            downloadCSV(result, currentTable);
+        };
+
+        window.exportQueryCSV = function() {
+            if (!lastQueryResults) return;
+            downloadCSV(lastQueryResults, 'query_results');
+        };
+
+        function downloadCSV(result, filename) {
+            const data = result.toArray();
+            const columns = result.schema.fields.map(f => f.name);
+
+            let csv = columns.join(',') + '\n';
+            data.forEach(row => {
+                csv += columns.map(col => {
+                    let val = row[col];
+                    if (val === null) return '';
+                    if (typeof val === 'object') val = JSON.stringify(val);
+                    if (typeof val === 'string' && (val.includes(',') || val.includes('"') || val.includes('\n'))) {
+                        val = '"' + val.replace(/"/g, '""') + '"';
+                    }
+                    return val;
+                }).join(',') + '\n';
+            });
+
+            const blob = new Blob([csv], { type: 'text/csv' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename + '.csv';
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+
+        // Tab switching
+        window.showTab = function(tab) {
+            document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
+            document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('tab-active'));
+
+            document.getElementById('content-' + tab).classList.remove('hidden');
+            document.getElementById('tab-' + tab).classList.add('tab-active');
+        };
+
+        // Loading overlay
+        function showLoading(show) {
+            document.getElementById('loading-overlay').classList.toggle('hidden', !show);
+        }
+
+        // Keyboard shortcuts
+        document.addEventListener('keydown', (e) => {
+            if (e.ctrlKey && e.key === 'Enter') {
+                runQuery();
+            }
+        });
+
+        // File input handler
+        document.getElementById('db-file-input').addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (file) loadDatabase(file);
+        });
+
+        // Initialize
+        initDuckDB();
+    </script>
+</body>
+</html>

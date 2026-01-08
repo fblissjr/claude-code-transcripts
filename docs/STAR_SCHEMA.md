@@ -34,6 +34,22 @@ The star schema follows dimensional modeling best practices:
                     │fact_content │
                     │   _blocks   │
                     └─────────────┘
+
+    Enhanced Analytics Tables:
+
+    ┌───────────┐   ┌─────────────┐   ┌───────────────────┐
+    │ dim_file  │───│fact_file_   │───│dim_programming_   │
+    └───────────┘   │ operations  │   │   language        │
+                    └─────────────┘   └───────────────────┘
+                    ┌─────────────┐
+    ┌─────────────┐ │fact_code_   │
+    │dim_error_   │ │  _blocks    │
+    │   type      │ └─────────────┘
+    └──────┬──────┘
+           │
+    ┌──────┴──────┐
+    │ fact_errors │
+    └─────────────┘
 ```
 
 ## Dimension Tables
@@ -145,6 +161,41 @@ Content block type dimension (pre-populated).
 | content_block_type_key | VARCHAR | MD5 hash of block_type |
 | block_type | VARCHAR | "text", "tool_use", "tool_result", "thinking", "image" |
 
+### dim_file
+
+File dimension for tracking file operations.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| file_key | VARCHAR | MD5 hash of file_path |
+| file_path | VARCHAR | Full path to file |
+| file_name | VARCHAR | Base filename |
+| file_extension | VARCHAR | File extension (e.g., ".py", ".ts") |
+| directory_path | VARCHAR | Parent directory path |
+
+### dim_programming_language
+
+Programming language dimension for code block analysis.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| language_key | VARCHAR | MD5 hash of language_name |
+| language_name | VARCHAR | Language name (e.g., "python", "javascript") |
+| file_extensions | VARCHAR | Associated file extensions |
+
+**Supported Languages:**
+- python, javascript, typescript, java, cpp, c, csharp, go, rust, ruby, php, swift, kotlin, scala, sql, html, css, markdown, json, yaml, xml, bash, shell, powershell, dockerfile, makefile, toml, unknown
+
+### dim_error_type
+
+Error type dimension for error tracking and analysis.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| error_type_key | VARCHAR | MD5 hash of error_type |
+| error_type | VARCHAR | Error type (e.g., "FileNotFound", "PermissionDenied") |
+| error_category | VARCHAR | Category: "file_system", "network", "permission", "syntax", "runtime", "other" |
+
 ## Fact Tables
 
 ### fact_messages
@@ -167,6 +218,8 @@ One row per message - the core fact table.
 | has_tool_use | BOOLEAN | Contains tool_use blocks |
 | has_tool_result | BOOLEAN | Contains tool_result blocks |
 | has_thinking | BOOLEAN | Contains thinking blocks |
+| word_count | INTEGER | Word count in text content |
+| estimated_tokens | INTEGER | Estimated token count (~1.3x words) |
 | content_text | TEXT | Extracted text content (truncated) |
 | content_json | JSON | Full content as JSON |
 
@@ -226,6 +279,56 @@ Pre-aggregated session metrics for dashboard queries.
 | session_duration_seconds | INTEGER | Duration in seconds |
 | first_timestamp | TIMESTAMP | Session start |
 | last_timestamp | TIMESTAMP | Session end |
+
+### fact_file_operations
+
+File-level operations tracking for read/write/edit activities.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| file_operation_id | VARCHAR | Generated ID (tool_call_id-file_key) |
+| tool_call_id | VARCHAR | FK to fact_tool_calls |
+| session_key | VARCHAR | FK to dim_session |
+| file_key | VARCHAR | FK to dim_file |
+| tool_key | VARCHAR | FK to dim_tool |
+| date_key | INTEGER | FK to dim_date |
+| time_key | INTEGER | FK to dim_time |
+| operation_type | VARCHAR | "read", "write", "edit", "search", "list" |
+| file_size_chars | INTEGER | Size of file content in characters |
+| timestamp | TIMESTAMP | When operation occurred |
+
+### fact_code_blocks
+
+Code block extraction from messages for language analysis.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| code_block_id | VARCHAR | Generated ID (message_id-index) |
+| message_id | VARCHAR | Parent message UUID |
+| session_key | VARCHAR | FK to dim_session |
+| language_key | VARCHAR | FK to dim_programming_language |
+| date_key | INTEGER | FK to dim_date |
+| time_key | INTEGER | FK to dim_time |
+| block_index | INTEGER | Position within message (0-based) |
+| line_count | INTEGER | Number of lines in code block |
+| char_count | INTEGER | Character count |
+| code_text | TEXT | Code block content (truncated) |
+
+### fact_errors
+
+Error tracking from tool calls.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| error_id | VARCHAR | Generated ID (tool_call_id) |
+| tool_call_id | VARCHAR | FK to fact_tool_calls |
+| session_key | VARCHAR | FK to dim_session |
+| tool_key | VARCHAR | FK to dim_tool |
+| error_type_key | VARCHAR | FK to dim_error_type |
+| date_key | INTEGER | FK to dim_date |
+| time_key | INTEGER | FK to dim_time |
+| error_message | TEXT | Error message content |
+| timestamp | TIMESTAMP | When error occurred |
 
 ## Staging Table
 
@@ -361,6 +464,66 @@ SELECT
 FROM fact_session_summary fss
 JOIN dim_date dd ON fss.date_key = dd.date_key
 GROUP BY dd.is_weekend;
+```
+
+### File Operations by Extension
+
+```sql
+SELECT
+    df.file_extension,
+    ffo.operation_type,
+    COUNT(*) as operation_count,
+    AVG(ffo.file_size_chars) as avg_file_size
+FROM fact_file_operations ffo
+JOIN dim_file df ON ffo.file_key = df.file_key
+GROUP BY df.file_extension, ffo.operation_type
+ORDER BY operation_count DESC
+LIMIT 20;
+```
+
+### Code Blocks by Language
+
+```sql
+SELECT
+    dpl.language_name,
+    COUNT(*) as block_count,
+    SUM(fcb.line_count) as total_lines,
+    AVG(fcb.line_count) as avg_lines_per_block
+FROM fact_code_blocks fcb
+JOIN dim_programming_language dpl ON fcb.language_key = dpl.language_key
+GROUP BY dpl.language_name
+ORDER BY block_count DESC;
+```
+
+### Error Analysis by Tool
+
+```sql
+SELECT
+    dt.tool_name,
+    det.error_type,
+    COUNT(*) as error_count
+FROM fact_errors fe
+JOIN dim_tool dt ON fe.tool_key = dt.tool_key
+JOIN dim_error_type det ON fe.error_type_key = det.error_type_key
+GROUP BY dt.tool_name, det.error_type
+ORDER BY error_count DESC
+LIMIT 15;
+```
+
+### Token Estimation by Model
+
+```sql
+SELECT
+    dm.model_family,
+    COUNT(*) as message_count,
+    SUM(fm.word_count) as total_words,
+    SUM(fm.estimated_tokens) as total_tokens,
+    AVG(fm.estimated_tokens) as avg_tokens_per_message
+FROM fact_messages fm
+JOIN dim_model dm ON fm.model_key = dm.model_key
+WHERE fm.model_key IS NOT NULL
+GROUP BY dm.model_family
+ORDER BY total_tokens DESC;
 ```
 
 ## Usage
