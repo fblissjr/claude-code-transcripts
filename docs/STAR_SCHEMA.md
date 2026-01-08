@@ -886,3 +886,194 @@ The `run_star_schema_etl` function performs a three-phase ETL:
    - Insert facts
 
 The ETL is designed to be idempotent - running it multiple times with the same input produces the same result.
+
+## Use Cases
+
+Beyond basic analytics, the star schema enables several advanced applications:
+
+### 1. Context Retrieval for New Sessions
+
+Use prior session data as context for new Claude conversations. Query relevant past interactions based on files, topics, or patterns:
+
+```sql
+-- Find sessions that worked on similar files
+SELECT DISTINCT ds.session_id, ds.cwd, dp.project_name,
+       fm.content_text, fm.timestamp
+FROM fact_file_operations ffo
+JOIN dim_file df ON ffo.file_key = df.file_key
+JOIN dim_session ds ON ffo.session_key = ds.session_key
+JOIN dim_project dp ON ds.project_key = dp.project_key
+JOIN fact_messages fm ON ffo.session_key = fm.session_key
+WHERE df.file_path LIKE '%auth%'
+  AND fm.content_text IS NOT NULL
+ORDER BY fm.timestamp DESC
+LIMIT 20;
+```
+
+```python
+# Build context from past sessions for a new conversation
+def get_relevant_context(conn, file_patterns, limit=5):
+    """Retrieve relevant past interactions for context injection."""
+    context_messages = []
+    for pattern in file_patterns:
+        result = conn.execute("""
+            SELECT fm.content_text, dmt.message_type
+            FROM fact_messages fm
+            JOIN dim_message_type dmt ON fm.message_type_key = dmt.message_type_key
+            JOIN fact_file_operations ffo ON fm.session_key = ffo.session_key
+            JOIN dim_file df ON ffo.file_key = df.file_key
+            WHERE df.file_path LIKE ?
+            ORDER BY fm.timestamp DESC
+            LIMIT ?
+        """, [f"%{pattern}%", limit]).fetchall()
+        context_messages.extend(result)
+    return context_messages
+```
+
+### 2. Tool Pattern Optimization
+
+Analyze which tool sequences are most effective for different task types:
+
+```sql
+-- Find successful tool patterns (sessions that completed quickly)
+WITH session_metrics AS (
+    SELECT session_key,
+           session_duration_seconds,
+           total_tool_calls,
+           NTILE(4) OVER (ORDER BY session_duration_seconds) as speed_quartile
+    FROM fact_session_summary
+)
+SELECT curr.tool_name, prev.tool_name as prev_tool,
+       COUNT(*) as transitions,
+       AVG(sm.session_duration_seconds) as avg_session_duration
+FROM fact_tool_chain_steps tcs
+JOIN dim_tool curr ON tcs.tool_key = curr.tool_key
+LEFT JOIN dim_tool prev ON tcs.prev_tool_key = prev.tool_key
+JOIN session_metrics sm ON tcs.session_key = sm.session_key
+WHERE sm.speed_quartile = 1  -- Fastest sessions
+GROUP BY curr.tool_name, prev.tool_name
+HAVING COUNT(*) > 5
+ORDER BY transitions DESC;
+```
+
+### 3. Session Continuation / Handoff
+
+Resume or hand off sessions by reconstructing state:
+
+```sql
+-- Get full session state for continuation
+SELECT ds.session_id, ds.cwd, ds.git_branch,
+       fm.message_id, fm.content_text, fm.conversation_depth,
+       dmt.message_type, dm.model_name
+FROM fact_messages fm
+JOIN dim_session ds ON fm.session_key = ds.session_key
+JOIN dim_message_type dmt ON fm.message_type_key = dmt.message_type_key
+LEFT JOIN dim_model dm ON fm.model_key = dm.model_key
+WHERE ds.session_id = 'target-session-id'
+ORDER BY fm.timestamp;
+
+-- Find files modified in session for handoff context
+SELECT df.file_path, ffo.operation_type,
+       COUNT(*) as operations
+FROM fact_file_operations ffo
+JOIN dim_file df ON ffo.file_key = df.file_key
+JOIN dim_session ds ON ffo.session_key = ds.session_key
+WHERE ds.session_id = 'target-session-id'
+GROUP BY df.file_path, ffo.operation_type;
+```
+
+### 4. Training Data Extraction
+
+Extract high-quality interaction patterns for fine-tuning or analysis:
+
+```sql
+-- Extract successful debugging sessions (LLM enrichment required)
+SELECT fm.content_text, dmt.message_type, di.intent_name
+FROM fact_messages fm
+JOIN dim_message_type dmt ON fm.message_type_key = dmt.message_type_key
+JOIN fact_message_enrichment fme ON fm.message_id = fme.message_id
+JOIN dim_intent di ON fme.intent_key = di.intent_key
+JOIN fact_session_insights fsi ON fm.session_key = fsi.session_key
+WHERE di.intent_name = 'debug'
+  AND fsi.task_completed = true
+  AND fme.confidence_score > 0.8
+ORDER BY fm.timestamp;
+```
+
+### 5. Error Pattern Analysis
+
+Identify and learn from error patterns:
+
+```sql
+-- Find error-prone file/tool combinations
+SELECT df.file_extension, dt.tool_name, det.error_type,
+       COUNT(*) as error_count,
+       COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (PARTITION BY dt.tool_name) as error_pct
+FROM fact_errors fe
+JOIN fact_file_operations ffo ON fe.tool_call_id = ffo.tool_call_id
+JOIN dim_file df ON ffo.file_key = df.file_key
+JOIN dim_tool dt ON fe.tool_key = dt.tool_key
+JOIN dim_error_type det ON fe.error_type_key = det.error_type_key
+GROUP BY df.file_extension, dt.tool_name, det.error_type
+HAVING COUNT(*) > 3
+ORDER BY error_count DESC;
+```
+
+### 6. Cost Estimation and Optimization
+
+Track token usage for cost analysis:
+
+```sql
+-- Estimate costs by model and project
+SELECT dp.project_name, dm.model_family,
+       SUM(fm.estimated_tokens) as total_tokens,
+       -- Rough cost estimate (adjust rates as needed)
+       CASE dm.model_family
+           WHEN 'opus' THEN SUM(fm.estimated_tokens) * 0.000015
+           WHEN 'sonnet' THEN SUM(fm.estimated_tokens) * 0.000003
+           WHEN 'haiku' THEN SUM(fm.estimated_tokens) * 0.00000025
+           ELSE 0
+       END as estimated_cost_usd
+FROM fact_messages fm
+JOIN dim_model dm ON fm.model_key = dm.model_key
+JOIN dim_session ds ON fm.session_key = ds.session_key
+JOIN dim_project dp ON ds.project_key = dp.project_key
+GROUP BY dp.project_name, dm.model_family
+ORDER BY total_tokens DESC;
+```
+
+### 7. Knowledge Base Construction
+
+Build a searchable knowledge base from past sessions:
+
+```sql
+-- Extract entities and their contexts for a knowledge graph
+SELECT det.entity_type, fem.entity_normalized, fem.context_snippet,
+       dp.project_name, ds.session_id, fm.timestamp
+FROM fact_entity_mentions fem
+JOIN dim_entity_type det ON fem.entity_type_key = det.entity_type_key
+JOIN fact_messages fm ON fem.message_id = fm.message_id
+JOIN dim_session ds ON fem.session_key = ds.session_key
+JOIN dim_project dp ON ds.project_key = dp.project_key
+WHERE det.entity_type IN ('function_name', 'class_name', 'file_path')
+ORDER BY fem.entity_normalized, fm.timestamp;
+```
+
+### 8. Workflow Replay
+
+Reconstruct and potentially replay successful workflows:
+
+```sql
+-- Get ordered tool sequence for a successful session
+SELECT tcs.step_position, dt.tool_name, dt.tool_category,
+       ftc.input_summary, tcs.time_since_prev_seconds
+FROM fact_tool_chain_steps tcs
+JOIN dim_tool dt ON tcs.tool_key = dt.tool_key
+JOIN fact_tool_calls ftc ON tcs.tool_call_id = ftc.tool_call_id
+JOIN fact_session_insights fsi ON tcs.session_key = fsi.session_key
+WHERE fsi.task_completed = true
+  AND fsi.outcome_status = 'success'
+ORDER BY tcs.chain_id, tcs.step_position;
+```
+
+These use cases can be combined - for example, using context retrieval + tool pattern analysis to pre-populate a new session with relevant history and suggest optimal tool sequences based on the task type.
