@@ -1238,22 +1238,22 @@ class TestLocalSessionCLI:
         # Mock Path.home() to return our tmp_path
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
-        # Mock questionary.select to return the session file
-        class MockSelect:
+        # Mock questionary.checkbox to return the session file (as list)
+        class MockCheckbox:
             def __init__(self, *args, **kwargs):
                 pass
 
             def ask(self):
-                return session_file
+                return [session_file]
 
-        monkeypatch.setattr(questionary, "select", MockSelect)
+        monkeypatch.setattr(questionary, "checkbox", MockCheckbox)
 
         runner = CliRunner()
         result = runner.invoke(cli, ["local"])
 
         assert result.exit_code == 0
         assert "Loading local sessions" in result.output
-        assert "Generated" in result.output
+        assert "Selected 1 session" in result.output
 
     def test_no_args_runs_local_command(self, tmp_path, monkeypatch):
         """Test that running with no arguments runs local command."""
@@ -1274,15 +1274,15 @@ class TestLocalSessionCLI:
         # Mock Path.home() to return our tmp_path
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
-        # Mock questionary.select to return the session file
-        class MockSelect:
+        # Mock questionary.checkbox to return the session file (as list)
+        class MockCheckbox:
             def __init__(self, *args, **kwargs):
                 pass
 
             def ask(self):
-                return session_file
+                return [session_file]
 
-        monkeypatch.setattr(questionary, "select", MockSelect)
+        monkeypatch.setattr(questionary, "checkbox", MockCheckbox)
 
         runner = CliRunner()
         result = runner.invoke(cli, [])
@@ -1309,21 +1309,21 @@ class TestLocalSessionCLI:
         # Mock Path.home() to return our tmp_path
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
-        # Mock questionary.select to return None (cancelled)
-        class MockSelect:
+        # Mock questionary.checkbox to return empty list (cancelled)
+        class MockCheckbox:
             def __init__(self, *args, **kwargs):
                 pass
 
             def ask(self):
-                return None
+                return []
 
-        monkeypatch.setattr(questionary, "select", MockSelect)
+        monkeypatch.setattr(questionary, "checkbox", MockCheckbox)
 
         runner = CliRunner()
         result = runner.invoke(cli, ["local"])
 
         assert result.exit_code == 0
-        assert "No session selected" in result.output
+        assert "No sessions selected" in result.output
 
 
 class TestOutputAutoOption:
@@ -1418,15 +1418,15 @@ class TestOutputAutoOption:
         # Mock Path.home() to return our tmp_path
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
-        # Mock questionary.select to return the session file
-        class MockSelect:
+        # Mock questionary.checkbox to return the session file (as list)
+        class MockCheckbox:
             def __init__(self, *args, **kwargs):
                 pass
 
             def ask(self):
-                return session_file
+                return [session_file]
 
-        monkeypatch.setattr(questionary, "select", MockSelect)
+        monkeypatch.setattr(questionary, "checkbox", MockCheckbox)
 
         runner = CliRunner()
         result = runner.invoke(cli, ["local", "-a", "-o", str(output_parent)])

@@ -320,6 +320,126 @@ def find_local_sessions(folder, limit=10):
     return results[:limit]
 
 
+def extract_session_metadata(session_path):
+    """Extract metadata from first line of a session file.
+
+    Returns dict with:
+        - sessionId: The session's unique ID
+        - agentId: Agent ID if this is an agent session (None otherwise)
+        - isSidechain: True if this is an agent/sidechain session
+
+    Returns empty dict if file is empty or unreadable.
+    """
+    session_path = Path(session_path)
+    try:
+        with open(session_path, "r", encoding="utf-8") as f:
+            first_line = f.readline().strip()
+            if not first_line:
+                return {}
+            data = json.loads(first_line)
+            return {
+                "sessionId": data.get("sessionId"),
+                "agentId": data.get("agentId"),
+                "isSidechain": data.get("isSidechain", False),
+            }
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def find_agent_sessions(session_paths, recursive=True):
+    """Find all agent sessions related to given parent sessions.
+
+    Agent sessions are identified by:
+    - Filename pattern: agent-{agentId}.jsonl
+    - Contains sessionId field linking to parent session
+    - Has isSidechain: true flag
+
+    Args:
+        session_paths: List of parent session Paths
+        recursive: If True, also discover agents spawned by agents
+
+    Returns:
+        Dict mapping parent session Path to list of agent session Paths.
+        When recursive=True, nested agents are flattened under the original parent.
+    """
+    if not session_paths:
+        return {}
+
+    session_paths = [Path(p) for p in session_paths]
+    original_set = set(session_paths)
+    result = {p: [] for p in session_paths}
+
+    # Build a map of sessionId -> session_path for quick lookup
+    session_id_map = {}
+    for p in session_paths:
+        meta = extract_session_metadata(p)
+        if meta.get("sessionId"):
+            session_id_map[meta["sessionId"]] = p
+        # Also map by file stem
+        session_id_map[p.stem] = p
+
+    # Track which original parent each path traces back to
+    # (for recursive flattening)
+    root_parent_map = {p: p for p in session_paths}
+
+    # Get all directories containing the sessions
+    dirs = set(p.parent for p in session_paths)
+
+    # Find all agent files in those directories
+    agent_files = []
+    for d in dirs:
+        agent_files.extend(d.glob("agent-*.jsonl"))
+
+    # Multiple passes to handle recursive discovery
+    found_new = True
+    processed_agents = set()
+
+    while found_new:
+        found_new = False
+
+        for agent_path in agent_files:
+            if agent_path in processed_agents:
+                continue
+
+            meta = extract_session_metadata(agent_path)
+            parent_session_id = meta.get("sessionId")
+
+            if not parent_session_id:
+                processed_agents.add(agent_path)
+                continue
+
+            # Find the parent session
+            parent_path = session_id_map.get(parent_session_id)
+
+            if parent_path is not None:
+                processed_agents.add(agent_path)
+                found_new = True
+
+                # Find the root parent (original session, not an agent)
+                root_parent = root_parent_map.get(parent_path, parent_path)
+
+                # Add agent to the appropriate parent
+                if recursive and root_parent in original_set:
+                    # Flatten to original parent
+                    if agent_path not in result[root_parent]:
+                        result[root_parent].append(agent_path)
+                    # Track this agent's root parent
+                    root_parent_map[agent_path] = root_parent
+                else:
+                    # Non-recursive: add to immediate parent only
+                    if parent_path in result:
+                        if agent_path not in result[parent_path]:
+                            result[parent_path].append(agent_path)
+
+                # Register this agent in session_id_map so its children can find it
+                if recursive:
+                    agent_stem = agent_path.stem
+                    if agent_stem not in session_id_map:
+                        session_id_map[agent_stem] = agent_path
+
+    return result
+
+
 def get_project_display_name(folder_name):
     """Convert encoded folder name to readable project name.
 
@@ -682,7 +802,11 @@ def create_duckdb_schema(db_path):
             tool_use_count INTEGER,
             cwd VARCHAR,
             git_branch VARCHAR,
-            version VARCHAR
+            version VARCHAR,
+            is_agent BOOLEAN DEFAULT FALSE,
+            agent_id VARCHAR,
+            parent_session_id VARCHAR,
+            depth_level INTEGER DEFAULT 0
         )
     """
     )
@@ -701,7 +825,8 @@ def create_duckdb_schema(db_path):
             content_json JSON,
             has_tool_use BOOLEAN,
             has_tool_result BOOLEAN,
-            has_thinking BOOLEAN
+            has_thinking BOOLEAN,
+            is_sidechain BOOLEAN DEFAULT FALSE
         )
     """
     )
@@ -762,6 +887,12 @@ def export_session_to_duckdb(
     assistant_count = 0
     tool_use_count = 0
 
+    # Agent metadata
+    is_agent = False
+    agent_id = None
+    parent_session_id = None
+    is_sidechain = False
+
     # Maps to link tool_use to tool_result
     tool_use_map = (
         {}
@@ -790,6 +921,14 @@ def export_session_to_duckdb(
                 cwd = entry.get("cwd")
                 git_branch = entry.get("gitBranch")
                 version = entry.get("version")
+
+                # Extract agent metadata
+                agent_id = entry.get("agentId")
+                is_sidechain = entry.get("isSidechain", False)
+                is_agent = agent_id is not None
+                if is_agent:
+                    # For agents, the sessionId field points to the parent session
+                    parent_session_id = entry.get("sessionId")
 
             uuid = entry.get("uuid", "")
             parent_uuid = entry.get("parentUuid")
@@ -915,8 +1054,9 @@ def export_session_to_duckdb(
                 """
                 INSERT INTO messages (
                     id, session_id, parent_id, type, timestamp, model,
-                    content, content_json, has_tool_use, has_tool_result, has_thinking
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    content, content_json, has_tool_use, has_tool_result, has_thinking,
+                    is_sidechain
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
                 [
                     uuid,
@@ -930,6 +1070,7 @@ def export_session_to_duckdb(
                     has_tool_use,
                     has_tool_result,
                     has_thinking,
+                    is_sidechain,
                 ],
             )
 
@@ -940,8 +1081,9 @@ def export_session_to_duckdb(
             INSERT INTO sessions (
                 session_id, project_path, project_name, first_timestamp, last_timestamp,
                 message_count, user_message_count, assistant_message_count,
-                tool_use_count, cwd, git_branch, version
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                tool_use_count, cwd, git_branch, version,
+                is_agent, agent_id, parent_session_id, depth_level
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
             [
                 session_id,
@@ -956,6 +1098,10 @@ def export_session_to_duckdb(
                 cwd,
                 git_branch,
                 version,
+                is_agent,
+                agent_id,
+                parent_session_id,
+                0,  # depth_level - will be set by multi-session export
             ],
         )
 
@@ -1233,7 +1379,11 @@ def create_star_schema(db_path):
             git_branch VARCHAR,
             version VARCHAR,
             first_timestamp TIMESTAMP,
-            last_timestamp TIMESTAMP
+            last_timestamp TIMESTAMP,
+            is_agent BOOLEAN DEFAULT FALSE,
+            agent_id VARCHAR,
+            parent_session_key VARCHAR,
+            depth_level INTEGER DEFAULT 0
         )
     """
     )
@@ -1315,7 +1465,8 @@ def create_star_schema(db_path):
             response_time_seconds FLOAT,
             conversation_depth INTEGER,
             content_text TEXT,
-            content_json JSON
+            content_json JSON,
+            is_sidechain BOOLEAN DEFAULT FALSE
         )
     """
     )
@@ -2106,6 +2257,12 @@ def run_star_schema_etl(
     first_timestamp = None
     last_timestamp = None
 
+    # Agent metadata
+    is_agent = False
+    agent_id = None
+    parent_session_id = None
+    is_sidechain = False
+
     # Counters
     user_count = 0
     assistant_count = 0
@@ -2157,6 +2314,13 @@ def run_star_schema_etl(
                 cwd = entry.get("cwd")
                 git_branch = entry.get("gitBranch")
                 version = entry.get("version")
+
+                # Extract agent metadata
+                agent_id = entry.get("agentId")
+                is_sidechain = entry.get("isSidechain", False)
+                is_agent = agent_id is not None
+                if is_agent:
+                    parent_session_id = entry.get("sessionId")
 
             message_id = entry.get("uuid", "")
             parent_id = entry.get("parentUuid")
@@ -2571,6 +2735,7 @@ def run_star_schema_etl(
                         text_content[:truncate_output] if text_content else ""
                     ),
                     "content_json": content_json,
+                    "is_sidechain": is_sidechain,
                 }
             )
 
@@ -2597,8 +2762,9 @@ def run_star_schema_etl(
         conn.execute(
             """INSERT INTO dim_session
                (session_key, session_id, project_key, cwd, git_branch, version,
-                first_timestamp, last_timestamp)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                first_timestamp, last_timestamp, is_agent, agent_id,
+                parent_session_key, depth_level)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             [
                 session_key,
                 session_id,
@@ -2608,6 +2774,14 @@ def run_star_schema_etl(
                 version,
                 first_timestamp,
                 last_timestamp,
+                is_agent,
+                agent_id,
+                (
+                    generate_dimension_key(parent_session_id)
+                    if parent_session_id
+                    else None
+                ),
+                0,  # depth_level - will be set by multi-session export
             ],
         )
 
@@ -2728,8 +2902,8 @@ def run_star_schema_etl(
                 date_key, time_key, parent_message_id, timestamp, content_length,
                 content_block_count, has_tool_use, has_tool_result, has_thinking,
                 word_count, estimated_tokens, response_time_seconds, conversation_depth,
-                content_text, content_json)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                content_text, content_json, is_sidechain)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             [
                 msg["message_id"],
                 msg["session_key"],
@@ -2751,6 +2925,7 @@ def run_star_schema_etl(
                 msg["conversation_depth"],
                 msg["content_text"],
                 msg["content_json"],
+                msg["is_sidechain"],
             ],
         )
 
@@ -4251,8 +4426,39 @@ def cli():
     default=10,
     help="Maximum number of sessions to show (default: 10)",
 )
-def local_cmd(output, output_auto, repo, gist, include_json, open_browser, limit):
-    """Select and convert a local Claude Code session to HTML."""
+@click.option(
+    "--format",
+    "output_format",
+    type=click.Choice(["html", "duckdb", "duckdb-star"]),
+    default="html",
+    help="Output format: html (default), duckdb, or duckdb-star (star schema).",
+)
+@click.option(
+    "--include-subagents",
+    is_flag=True,
+    help="Auto-include related agent sessions (recursive by default).",
+)
+@click.option(
+    "--include-thinking",
+    is_flag=True,
+    help="Include thinking blocks in DuckDB export (can be large).",
+)
+def local_cmd(
+    output,
+    output_auto,
+    repo,
+    gist,
+    include_json,
+    open_browser,
+    limit,
+    output_format,
+    include_subagents,
+    include_thinking,
+):
+    """Select and convert local Claude Code sessions to HTML or DuckDB.
+
+    Supports multi-select: use SPACE to select multiple sessions, ENTER to confirm.
+    """
     projects_folder = Path.home() / ".claude" / "projects"
 
     if not projects_folder.exists():
@@ -4267,6 +4473,14 @@ def local_cmd(output, output_auto, repo, gist, include_json, open_browser, limit
         click.echo("No local sessions found.")
         return
 
+    # Count related agents for each session
+    agent_counts = {}
+    if include_subagents:
+        session_paths = [filepath for filepath, _ in results]
+        agent_map = find_agent_sessions(session_paths, recursive=True)
+        for filepath, agents in agent_map.items():
+            agent_counts[filepath] = len(agents)
+
     # Build choices for questionary
     choices = []
     for filepath, summary in results:
@@ -4277,45 +4491,115 @@ def local_cmd(output, output_auto, repo, gist, include_json, open_browser, limit
         # Truncate summary if too long
         if len(summary) > 50:
             summary = summary[:47] + "..."
-        display = f"{date_str}  {size_kb:5.0f} KB  {summary}"
+        # Show agent count if include_subagents
+        agent_suffix = ""
+        if include_subagents and agent_counts.get(filepath, 0) > 0:
+            agent_suffix = f" (+{agent_counts[filepath]} agents)"
+        display = f"{date_str}  {size_kb:5.0f} KB  {summary}{agent_suffix}"
         choices.append(questionary.Choice(title=display, value=filepath))
 
-    selected = questionary.select(
-        "Select a session to convert:",
+    # Multi-select with checkbox
+    selected = questionary.checkbox(
+        "Select sessions to convert (SPACE to select, ENTER to confirm):",
         choices=choices,
     ).ask()
 
-    if selected is None:
-        click.echo("No session selected.")
+    if not selected:
+        click.echo("No sessions selected.")
         return
 
-    session_file = selected
+    click.echo(f"Selected {len(selected)} session(s)")
 
-    # Determine output directory and whether to open browser
-    # If no -o specified, use temp dir and open browser by default
-    auto_open = output is None and not gist and not output_auto
+    # Auto-include subagents if requested
+    agent_map = {}
+    if include_subagents:
+        agent_map = find_agent_sessions(selected, recursive=True)
+        agent_count = sum(len(agents) for agents in agent_map.values())
+        if agent_count > 0:
+            click.echo(f"Including {agent_count} related agent session(s)")
+            for parent, agents in agent_map.items():
+                for agent_path in agents:
+                    if agent_path not in selected:
+                        selected.append(agent_path)
+
+    # Determine output path
     if output_auto:
-        # Use -o as parent dir (or current dir), with auto-named subdirectory
         parent_dir = Path(output) if output else Path(".")
-        output = parent_dir / session_file.stem
+        if len(selected) == 1:
+            output = parent_dir / selected[0].stem
+        else:
+            output = (
+                parent_dir / f"multi-session-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+            )
     elif output is None:
-        output = Path(tempfile.gettempdir()) / f"claude-session-{session_file.stem}"
+        if len(selected) == 1:
+            output = Path(tempfile.gettempdir()) / f"claude-session-{selected[0].stem}"
+        else:
+            output = (
+                Path(tempfile.gettempdir())
+                / f"claude-multi-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+            )
 
     output = Path(output)
-    generate_html(session_file, output, github_repo=repo)
+
+    # Execute based on format
+    if output_format == "html":
+        if len(selected) == 1 and not agent_map:
+            # Single session, no agents - use existing simple path
+            generate_html(selected[0], output, github_repo=repo)
+        else:
+            # Multiple sessions or has agents - use batch structure
+            output.mkdir(parents=True, exist_ok=True)
+            for idx, session_file in enumerate(selected, 1):
+                session_output = output / session_file.stem
+                click.echo(f"[{idx}/{len(selected)}] {session_file.name}")
+                generate_html(session_file, session_output, github_repo=repo)
+            click.echo(f"Generated {len(selected)} session(s)")
+
+    elif output_format in ("duckdb", "duckdb-star"):
+        db_path = (
+            output.with_suffix(".duckdb") if output.suffix != ".duckdb" else output
+        )
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+
+        if output_format == "duckdb":
+            conn = create_duckdb_schema(db_path)
+            for idx, session_file in enumerate(selected, 1):
+                click.echo(f"[{idx}/{len(selected)}] {session_file.name}")
+                export_session_to_duckdb(
+                    conn,
+                    session_file,
+                    session_file.parent.name,
+                    include_thinking=include_thinking,
+                )
+            conn.close()
+        else:
+            conn = create_star_schema(db_path)
+            for idx, session_file in enumerate(selected, 1):
+                click.echo(f"[{idx}/{len(selected)}] {session_file.name}")
+                run_star_schema_etl(
+                    conn,
+                    session_file,
+                    session_file.parent.name,
+                    include_thinking=include_thinking,
+                )
+            conn.close()
+
+        click.echo(f"Exported to {db_path}")
+        return  # Skip browser open for DuckDB
 
     # Show output directory
     click.echo(f"Output: {output.resolve()}")
 
     # Copy JSONL file to output directory if requested
-    if include_json:
+    if include_json and output_format == "html":
         output.mkdir(exist_ok=True)
-        json_dest = output / session_file.name
-        shutil.copy(session_file, json_dest)
-        json_size_kb = json_dest.stat().st_size / 1024
-        click.echo(f"JSONL: {json_dest} ({json_size_kb:.1f} KB)")
+        for session_file in selected:
+            json_dest = output / session_file.name
+            shutil.copy(session_file, json_dest)
+        click.echo(f"Copied {len(selected)} JSONL file(s)")
 
-    if gist:
+    if gist and output_format == "html" and len(selected) == 1:
         # Inject gist preview JS and create gist
         inject_gist_preview_js(output)
         click.echo("Creating GitHub gist...")
@@ -4323,9 +4607,18 @@ def local_cmd(output, output_auto, repo, gist, include_json, open_browser, limit
         preview_url = f"https://gisthost.github.io/?{gist_id}/index.html"
         click.echo(f"Gist: {gist_url}")
         click.echo(f"Preview: {preview_url}")
+    elif gist:
+        click.echo("Warning: --gist only supported for single HTML session export")
 
-    if open_browser or auto_open:
-        index_url = (output / "index.html").resolve().as_uri()
+    # Determine whether to open browser
+    auto_open = output is None and not gist and not output_auto
+    if (open_browser or auto_open) and output_format == "html":
+        if len(selected) == 1 and not agent_map:
+            index_url = (output / "index.html").resolve().as_uri()
+        else:
+            # For multiple sessions, open the first one
+            first_session_output = output / selected[0].stem
+            index_url = (first_session_output / "index.html").resolve().as_uri()
         webbrowser.open(index_url)
 
 

@@ -425,3 +425,138 @@ class TestDuckdbFullTextSearch:
         ).fetchall()
         assert len(result) == 1
         conn.close()
+
+
+class TestAgentSchemaColumns:
+    """Tests for agent-related schema columns."""
+
+    def test_sessions_has_agent_columns(self, output_dir):
+        """Test that sessions table has agent-related columns."""
+        db_path = output_dir / "test.duckdb"
+        conn = create_duckdb_schema(db_path)
+
+        # Check for agent columns
+        result = conn.execute("DESCRIBE sessions").fetchall()
+        column_names = [row[0] for row in result]
+
+        assert "is_agent" in column_names
+        assert "agent_id" in column_names
+        assert "parent_session_id" in column_names
+        assert "depth_level" in column_names
+        conn.close()
+
+    def test_messages_has_sidechain_column(self, output_dir):
+        """Test that messages table has is_sidechain column."""
+        db_path = output_dir / "test.duckdb"
+        conn = create_duckdb_schema(db_path)
+
+        result = conn.execute("DESCRIBE messages").fetchall()
+        column_names = [row[0] for row in result]
+
+        assert "is_sidechain" in column_names
+        conn.close()
+
+
+@pytest.fixture
+def agent_session_file(tmp_path):
+    """Create an agent session file for testing."""
+    agent = tmp_path / "agent-xyz789.jsonl"
+    agent.write_text(
+        json.dumps(
+            {
+                "type": "user",
+                "uuid": "agent-user-001",
+                "parentUuid": None,
+                "sessionId": "parent-123",
+                "agentId": "xyz789",
+                "isSidechain": True,
+                "timestamp": "2025-01-15T10:05:00.000Z",
+                "cwd": "/home/user/project",
+                "message": {"role": "user", "content": "Agent task"},
+            }
+        )
+        + "\n"
+        + json.dumps(
+            {
+                "type": "assistant",
+                "uuid": "agent-asst-001",
+                "parentUuid": "agent-user-001",
+                "sessionId": "parent-123",
+                "agentId": "xyz789",
+                "isSidechain": True,
+                "timestamp": "2025-01-15T10:05:05.000Z",
+                "message": {
+                    "role": "assistant",
+                    "model": "claude-haiku-4-5-20251001",
+                    "content": "I'll handle this agent task.",
+                },
+            }
+        )
+        + "\n"
+    )
+    return agent
+
+
+class TestAgentSessionExport:
+    """Tests for exporting agent sessions with proper metadata."""
+
+    def test_exports_agent_session_metadata(self, agent_session_file, output_dir):
+        """Test that agent session metadata is correctly exported."""
+        db_path = output_dir / "test.duckdb"
+        conn = create_duckdb_schema(db_path)
+
+        export_session_to_duckdb(conn, agent_session_file, "test-project")
+
+        result = conn.execute(
+            "SELECT is_agent, agent_id, parent_session_id FROM sessions"
+        ).fetchone()
+
+        assert result[0] is True  # is_agent
+        assert result[1] == "xyz789"  # agent_id
+        assert result[2] == "parent-123"  # parent_session_id
+        conn.close()
+
+    def test_regular_session_has_agent_defaults(self, sample_session_file, output_dir):
+        """Test that regular sessions have correct agent defaults."""
+        db_path = output_dir / "test.duckdb"
+        conn = create_duckdb_schema(db_path)
+
+        export_session_to_duckdb(conn, sample_session_file, "test-project")
+
+        result = conn.execute(
+            "SELECT is_agent, agent_id, parent_session_id, depth_level FROM sessions"
+        ).fetchone()
+
+        assert result[0] is False  # is_agent
+        assert result[1] is None  # agent_id
+        assert result[2] is None  # parent_session_id
+        assert result[3] == 0  # depth_level
+        conn.close()
+
+    def test_sidechain_messages_flagged(self, agent_session_file, output_dir):
+        """Test that messages from agent sessions have is_sidechain=True."""
+        db_path = output_dir / "test.duckdb"
+        conn = create_duckdb_schema(db_path)
+
+        export_session_to_duckdb(conn, agent_session_file, "test-project")
+
+        result = conn.execute(
+            "SELECT COUNT(*) FROM messages WHERE is_sidechain = TRUE"
+        ).fetchone()
+
+        assert result[0] == 2  # Both messages should be sidechain
+        conn.close()
+
+    def test_regular_messages_not_sidechain(self, sample_session_file, output_dir):
+        """Test that messages from regular sessions have is_sidechain=False."""
+        db_path = output_dir / "test.duckdb"
+        conn = create_duckdb_schema(db_path)
+
+        export_session_to_duckdb(conn, sample_session_file, "test-project")
+
+        result = conn.execute(
+            "SELECT COUNT(*) FROM messages WHERE is_sidechain = FALSE"
+        ).fetchone()
+
+        assert result[0] == 4  # All 4 messages should not be sidechain
+        conn.close()
