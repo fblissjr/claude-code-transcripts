@@ -9,6 +9,7 @@ import pytest
 from claude_code_transcripts import (
     extract_session_metadata,
     find_agent_sessions,
+    generate_multi_session_index,
 )
 
 
@@ -281,3 +282,79 @@ class TestFindAgentSessions:
 
         assert other in result
         assert result[other] == []
+
+
+class TestGenerateMultiSessionIndex:
+    """Tests for generate_multi_session_index function."""
+
+    def test_generates_index_html(self, session_dir, tmp_path):
+        """Should generate index.html in output directory."""
+        _, parent, agent1, agent2, _ = session_dir
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+
+        agent_map = {parent: [agent1, agent2]}
+        result = generate_multi_session_index(output_dir, [parent], agent_map=agent_map)
+
+        assert result == output_dir / "index.html"
+        assert result.exists()
+
+    def test_includes_session_info(self, session_dir, tmp_path):
+        """Index should include session names and links."""
+        _, parent, _, _, _ = session_dir
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+
+        generate_multi_session_index(output_dir, [parent])
+
+        html = (output_dir / "index.html").read_text()
+        assert parent.stem in html
+        assert f'href="{parent.stem}/index.html"' in html
+
+    def test_shows_agent_badges(self, session_dir, tmp_path):
+        """Parent sessions with agents should show agent badge."""
+        _, parent, agent1, agent2, _ = session_dir
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+
+        agent_map = {parent: [agent1, agent2]}
+        generate_multi_session_index(output_dir, [parent], agent_map=agent_map)
+
+        html = (output_dir / "index.html").read_text()
+        assert "agent-badge" in html
+        assert "2 agents" in html
+
+    def test_agent_sessions_indented(self, session_dir, tmp_path):
+        """Agent sessions should have agent class for indentation."""
+        _, parent, agent1, _, _ = session_dir
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+
+        agent_map = {parent: [agent1]}
+        generate_multi_session_index(output_dir, [parent, agent1], agent_map=agent_map)
+
+        html = (output_dir / "index.html").read_text()
+        assert 'class="index-item agent"' in html
+
+    def test_includes_css_and_js(self, session_dir, tmp_path):
+        """Index should include CSS and JS."""
+        _, parent, _, _, _ = session_dir
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+
+        generate_multi_session_index(output_dir, [parent])
+
+        html = (output_dir / "index.html").read_text()
+        assert "<style>" in html
+        assert "<script>" in html
+
+    def test_custom_title(self, session_dir, tmp_path):
+        """Should use custom title if provided."""
+        _, parent, _, _, _ = session_dir
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+
+        generate_multi_session_index(output_dir, [parent], title="My Custom Archive")
+
+        html = (output_dir / "index.html").read_text()
+        assert "My Custom Archive" in html

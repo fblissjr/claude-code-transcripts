@@ -4013,6 +4013,12 @@ details.continuation[open] summary { border-radius: 12px 12px 0 0; margin-bottom
 .search-result-type { background: var(--assistant-border); padding: 2px 6px; border-radius: 4px; font-size: 0.75rem; }
 .search-result-snippet { padding: 12px; font-size: 0.9rem; line-height: 1.5; }
 .search-more { padding: 12px; text-align: center; color: var(--text-muted); font-style: italic; }
+.agent-badge { display: inline-block; background: #7c4dff; color: white; font-size: 0.7rem; font-weight: 600; padding: 2px 8px; border-radius: 10px; margin-left: 8px; text-transform: uppercase; letter-spacing: 0.5px; }
+.index-item.agent { margin-left: 24px; border-left-color: #7c4dff; background: linear-gradient(135deg, #ede7f6 0%, #e8eaf6 100%); }
+.index-item.agent .index-item-number { color: #7c4dff; }
+.session-group { margin-bottom: 20px; }
+.session-group-header { font-size: 0.85rem; color: var(--text-muted); margin-bottom: 8px; padding-left: 4px; }
+.depth-indicator { color: #7c4dff; margin-right: 4px; }
 @media (max-width: 600px) { body { padding: 8px; } .message, .index-item { border-radius: 8px; } .message-content, .index-item-content { padding: 12px; } pre { font-size: 0.8rem; padding: 8px; } #search-box input, #global-search-box input { width: 100%; min-width: 100px; } .header-row { flex-direction: column; align-items: stretch; } .header-row h1 { text-align: center; } #global-search-box { width: 100%; justify-content: center; } #search-modal[open], #global-search-modal[open] { width: 95vw; height: 90vh; } .search-modal-header { flex-wrap: wrap; } .search-modal-header input { min-width: 150px; } .search-result-meta { font-size: 0.75rem; } .search-result-snippet { font-size: 0.85rem; padding: 8px; } }
 """
 
@@ -4199,6 +4205,173 @@ def generate_pagination_html(current_page, total_pages):
 def generate_index_pagination_html(total_pages):
     """Generate pagination for index page where Index is current (first page)."""
     return _macros.index_pagination(total_pages)
+
+
+def generate_multi_session_index(
+    output_dir,
+    session_files,
+    agent_map=None,
+    title="Claude Code Sessions",
+):
+    """Generate an index.html for multiple exported sessions with agent relationships.
+
+    Args:
+        output_dir: Directory containing the exported sessions
+        session_files: List of session file Paths that were exported
+        agent_map: Optional dict mapping parent paths to lists of agent paths
+        title: Title for the index page
+    """
+    output_dir = Path(output_dir)
+    agent_map = agent_map or {}
+
+    # Build session info with agent relationships
+    sessions_data = []
+
+    # Create a set of all agent paths for quick lookup
+    all_agent_paths = set()
+    for agents in agent_map.values():
+        all_agent_paths.update(agents)
+
+    # First, add parent sessions
+    for session_path in session_files:
+        if session_path in all_agent_paths:
+            continue  # Skip agents here, they'll be added under their parents
+
+        # Get session info
+        try:
+            stat = session_path.stat()
+            mod_time = datetime.fromtimestamp(stat.st_mtime)
+            date_str = mod_time.strftime("%Y-%m-%d %H:%M")
+            size_kb = stat.st_size / 1024
+
+            # Extract first user message as summary
+            data = parse_session_file(session_path)
+            summary = ""
+            for entry in data.get("loglines", []):
+                if entry.get("type") == "user":
+                    msg = entry.get("message", {})
+                    if isinstance(msg, dict):
+                        content = msg.get("content", "")
+                        if isinstance(content, str):
+                            summary = content[:100]
+                        elif isinstance(content, list):
+                            for item in content:
+                                if (
+                                    isinstance(item, dict)
+                                    and item.get("type") == "text"
+                                ):
+                                    summary = item.get("text", "")[:100]
+                                    break
+                    break
+
+            session_info = {
+                "name": session_path.stem,
+                "date": date_str,
+                "size_kb": size_kb,
+                "summary": summary[:50] + "..." if len(summary) > 50 else summary,
+                "is_agent": False,
+                "agents": [],
+            }
+
+            # Add agent sessions under this parent
+            if session_path in agent_map:
+                for agent_path in agent_map[session_path]:
+                    try:
+                        agent_stat = agent_path.stat()
+                        agent_mod_time = datetime.fromtimestamp(agent_stat.st_mtime)
+                        agent_meta = extract_session_metadata(agent_path)
+
+                        session_info["agents"].append(
+                            {
+                                "name": agent_path.stem,
+                                "date": agent_mod_time.strftime("%Y-%m-%d %H:%M"),
+                                "size_kb": agent_stat.st_size / 1024,
+                                "agent_id": agent_meta.get("agentId", ""),
+                            }
+                        )
+                    except (OSError, ValueError):
+                        continue
+
+            sessions_data.append(session_info)
+        except (OSError, ValueError):
+            continue
+
+    # Generate HTML
+    html_items = []
+    for session in sessions_data:
+        # Parent session
+        agent_badge = ""
+        if session["agents"]:
+            agent_badge = f'<span class="agent-badge">{len(session["agents"])} agent{"s" if len(session["agents"]) != 1 else ""}</span>'
+
+        html_items.append(
+            f"""
+        <div class="session-group">
+            <div class="index-item">
+                <a href="{session["name"]}/index.html">
+                    <div class="index-item-header">
+                        <span class="index-item-number">{session["name"]}{agent_badge}</span>
+                        <time>{session["date"]}</time>
+                    </div>
+                    <div class="index-item-content">
+                        <p style="margin: 0;">{session["summary"]}</p>
+                        <p style="margin: 4px 0 0 0; font-size: 0.8rem; color: var(--text-muted);">{session["size_kb"]:.0f} KB</p>
+                    </div>
+                </a>
+            </div>
+"""
+        )
+
+        # Agent sessions
+        for agent in session["agents"]:
+            html_items.append(
+                f"""
+            <div class="index-item agent">
+                <a href="{agent["name"]}/index.html">
+                    <div class="index-item-header">
+                        <span class="index-item-number"><span class="depth-indicator">|_</span>{agent["agent_id"]}</span>
+                        <time>{agent["date"]}</time>
+                    </div>
+                    <div class="index-item-content">
+                        <p style="margin: 0; font-size: 0.85rem; color: var(--text-muted);">Agent session - {agent["size_kb"]:.0f} KB</p>
+                    </div>
+                </a>
+            </div>
+"""
+            )
+
+        html_items.append("        </div>")  # Close session-group
+
+    # Build full HTML
+    total_sessions = len(session_files)
+    total_agents = sum(len(agents) for agents in agent_map.values())
+
+    html_content = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{title}</title>
+    <style>{CSS}</style>
+</head>
+<body>
+    <div class="container">
+        <div class="header-row">
+            <h1>{title}</h1>
+        </div>
+        <p style="color: var(--text-muted); margin-bottom: 24px;">
+            {total_sessions} session{"s" if total_sessions != 1 else ""}
+            {f" ({total_agents} agent sessions)" if total_agents else ""}
+        </p>
+        {"".join(html_items)}
+    </div>
+    <script>{JS}</script>
+</body>
+</html>"""
+
+    index_path = output_dir / "index.html"
+    index_path.write_text(html_content, encoding="utf-8")
+    return index_path
 
 
 def generate_html(json_path, output_dir, github_repo=None):
@@ -4522,7 +4695,7 @@ def local_cmd(
                     if agent_path not in selected:
                         selected.append(agent_path)
 
-    # Determine output path
+    # Determine output path - default to ./claude-archive (not temp dir)
     if output_auto:
         parent_dir = Path(output) if output else Path(".")
         if len(selected) == 1:
@@ -4532,13 +4705,8 @@ def local_cmd(
                 parent_dir / f"multi-session-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
             )
     elif output is None:
-        if len(selected) == 1:
-            output = Path(tempfile.gettempdir()) / f"claude-session-{selected[0].stem}"
-        else:
-            output = (
-                Path(tempfile.gettempdir())
-                / f"claude-multi-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
-            )
+        # Default to local ./claude-archive directory
+        output = Path("./claude-archive")
 
     output = Path(output)
 
@@ -4548,13 +4716,15 @@ def local_cmd(
             # Single session, no agents - use existing simple path
             generate_html(selected[0], output, github_repo=repo)
         else:
-            # Multiple sessions or has agents - use batch structure
+            # Multiple sessions or has agents - use batch structure with master index
             output.mkdir(parents=True, exist_ok=True)
             for idx, session_file in enumerate(selected, 1):
                 session_output = output / session_file.stem
                 click.echo(f"[{idx}/{len(selected)}] {session_file.name}")
                 generate_html(session_file, session_output, github_repo=repo)
-            click.echo(f"Generated {len(selected)} session(s)")
+            # Generate master index with agent relationships
+            generate_multi_session_index(output, selected, agent_map=agent_map)
+            click.echo(f"Generated {len(selected)} session(s) with master index")
 
     elif output_format in ("duckdb", "duckdb-star"):
         db_path = (
@@ -4610,15 +4780,10 @@ def local_cmd(
     elif gist:
         click.echo("Warning: --gist only supported for single HTML session export")
 
-    # Determine whether to open browser
-    auto_open = output is None and not gist and not output_auto
-    if (open_browser or auto_open) and output_format == "html":
-        if len(selected) == 1 and not agent_map:
-            index_url = (output / "index.html").resolve().as_uri()
-        else:
-            # For multiple sessions, open the first one
-            first_session_output = output / selected[0].stem
-            index_url = (first_session_output / "index.html").resolve().as_uri()
+    # Open browser if requested
+    if open_browser and output_format == "html":
+        # For multiple sessions or agents, open the master index
+        index_url = (output / "index.html").resolve().as_uri()
         webbrowser.open(index_url)
 
 
