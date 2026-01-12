@@ -40,6 +40,14 @@ export const state = {
     columnMeta: {},         // { tableName: [{ name, type, displayName, ... }] }
 };
 
+// Unicode arrow constants for UI
+export const ARROWS = {
+    RIGHT: '\u25B6',
+    DOWN: '\u25BC',
+    UP: '\u2191',
+    DOWN_SORT: '\u2193'
+};
+
 // Type icon mapping
 export const TYPE_ICONS = {
     integer:   { icon: '123', class: 'type-integer' },
@@ -65,19 +73,6 @@ export function subscribe(callback) {
 
 export function notify(changeType) {
     listeners.forEach(cb => cb(changeType));
-}
-
-// Reset query state (when changing base table)
-export function resetQueryState() {
-    state.selectedColumns = [];
-    state.joinedTables = new Set();
-    state.filters = {};
-    state.sorts = [];
-    state.page = 0;
-    state.totalRows = 0;
-    state.lastQuery = '';
-    state.data = [];
-    state.summary = {};
 }
 
 // Helper to check if a table is a fact table

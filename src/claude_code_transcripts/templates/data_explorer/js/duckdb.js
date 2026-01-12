@@ -107,7 +107,7 @@ async function discoverTables() {
  * Load column metadata for a table
  */
 async function loadTableColumns(tableName) {
-    const result = await state.conn.query(`DESCRIBE ${state.dbPrefix}${tableName}`);
+    const result = await state.conn.query(`DESCRIBE ${state.dbPrefix}"${escapeIdentifier(tableName)}"`);
 
     state.columnMeta[tableName] = result.toArray().map(row => {
         const colName = row.column_name;
@@ -191,6 +191,10 @@ export async function getDistinctValues(tableName, columnName, searchTerm = '') 
 // Helpers
 export function escapeSQL(str) {
     return String(str).replace(/'/g, "''");
+}
+
+export function escapeIdentifier(name) {
+    return String(name).replace(/"/g, '""');
 }
 
 function formatColumnName(name) {

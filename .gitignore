@@ -2,5 +2,5 @@
 __pycache__
 uv.lock
 .playwright-mcp/
-tests/__snapshots__/
+tests/__snapshots__/*
 tmp/

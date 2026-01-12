@@ -7,6 +7,13 @@ import { state, getRelationships, notify } from './state.js';
 import { escapeSQL, executeQuery } from './duckdb.js';
 
 /**
+ * Find a selected column by its alias
+ */
+function findColumnByAlias(alias) {
+    return state.selectedColumns.find(c => (c.alias || c.column) === alias);
+}
+
+/**
  * Build and execute the current query
  */
 export async function runQuery() {
@@ -61,18 +68,9 @@ function buildCountQuery() {
  */
 function buildQueryParts() {
     const baseAlias = 'f';
-    const selectParts = [];
     const joins = [];
     const dimAliases = {}; // { dimTable: alias }
     let aliasCounter = 0;
-
-    // Build SELECT clause
-    for (const col of state.selectedColumns) {
-        const alias = col.table === state.baseTable ? baseAlias : dimAliases[col.table];
-        if (alias) {
-            selectParts.push(`${alias}.${col.column} AS ${col.alias || col.column}`);
-        }
-    }
 
     // Determine which dimension tables need to be joined
     const neededDims = new Set();
@@ -85,7 +83,7 @@ function buildQueryParts() {
     // Also check filters for dimension columns
     for (const [colAlias, values] of Object.entries(state.filters)) {
         if (values && values.length > 0) {
-            const col = state.selectedColumns.find(c => (c.alias || c.column) === colAlias);
+            const col = findColumnByAlias(colAlias);
             if (col && col.table !== state.baseTable) {
                 neededDims.add(col.table);
             }
@@ -130,7 +128,7 @@ function buildQueryParts() {
     const conditions = [];
     for (const [colAlias, values] of Object.entries(state.filters)) {
         if (values && values.length > 0) {
-            const col = state.selectedColumns.find(c => (c.alias || c.column) === colAlias);
+            const col = findColumnByAlias(colAlias);
             if (col) {
                 let tableAlias = col.table === state.baseTable ? baseAlias : dimAliases[col.table];
                 if (tableAlias) {
@@ -146,7 +144,7 @@ function buildQueryParts() {
     let orderClause = '';
     if (state.sorts.length > 0) {
         const orderParts = state.sorts.map(s => {
-            const col = state.selectedColumns.find(c => (c.alias || c.column) === s.column);
+            const col = findColumnByAlias(s.column);
             if (col) {
                 const tableAlias = col.table === state.baseTable ? baseAlias : dimAliases[col.table];
                 if (tableAlias) {

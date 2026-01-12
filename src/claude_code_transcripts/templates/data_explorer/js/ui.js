@@ -3,7 +3,7 @@
  * Handles all DOM manipulation and UI updates
  */
 
-import { state, TYPE_ICONS, getTableDisplayName, getRelationships, isFactTable, isDimTable } from './state.js';
+import { state, TYPE_ICONS, ARROWS, getTableDisplayName, getRelationships } from './state.js';
 import { isColumnSelected, addColumn, removeColumn, setBaseTable, toggleSort, setFilter, clearFilters, setPage, runQuery, formatSQLParts } from './query-builder.js';
 import { getDistinctValues } from './duckdb.js';
 
@@ -176,7 +176,7 @@ function createDimTableSection(tableName, relationship) {
 
     const chevron = document.createElement('span');
     chevron.className = 'chevron text-gray-400 text-xs';
-    chevron.textContent = '\u25B6'; // Right arrow
+    chevron.textContent = ARROWS.RIGHT;
 
     const nameSpan = document.createElement('span');
     nameSpan.className = 'font-medium text-gray-700 flex-1';
@@ -203,7 +203,7 @@ function createDimTableSection(tableName, relationship) {
 
     header.addEventListener('click', () => {
         colContainer.classList.toggle('expanded');
-        chevron.textContent = colContainer.classList.contains('expanded') ? '\u25BC' : '\u25B6';
+        chevron.textContent = colContainer.classList.contains('expanded') ? ARROWS.DOWN : ARROWS.RIGHT;
     });
 
     section.appendChild(header);
@@ -358,7 +358,7 @@ export function renderGrid() {
 
         const sortSpan = document.createElement('span');
         sortSpan.className = 'text-gray-400';
-        sortSpan.textContent = sort ? (sort.dir === 'asc' ? ' \u2191' : ' \u2193') : '';
+        sortSpan.textContent = sort ? (sort.dir === 'asc' ? ` ${ARROWS.UP}` : ` ${ARROWS.DOWN_SORT}`) : '';
 
         wrapper.appendChild(typeSpan);
         wrapper.appendChild(nameSpan);

@@ -58,15 +58,7 @@ function handleStateChange(changeType) {
             break;
 
         case 'query-complete':
-            renderGrid();
-            renderSQL();
-            break;
-
         case 'query-error':
-            renderGrid();
-            renderSQL();
-            break;
-
         case 'sort-changed':
         case 'filter-changed':
         case 'page-changed':

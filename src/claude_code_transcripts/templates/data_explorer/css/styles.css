@@ -74,16 +74,6 @@
     z-index: 100;
 }
 
-/* Summary row */
-.summary-row {
-    position: sticky;
-    bottom: 0;
-    background: #f8fafc;
-    border-top: 2px solid #e2e8f0;
-    font-weight: 500;
-}
-.summary-label { font-size: 10px; color: #64748b; }
-
 /* SQL panel */
 .sql-panel {
     font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
@@ -101,7 +91,6 @@
     word-break: break-word;
 }
 .sql-keyword { color: #c084fc; }
-.sql-function { color: #22d3ee; }
 .sql-string { color: #a3e635; }
 .sql-number { color: #fb923c; }
 .sql-table { color: #60a5fa; }
@@ -120,17 +109,6 @@
     0% { transform: rotate(0deg); }
     100% { transform: rotate(360deg); }
 }
-
-/* Resize handle */
-.resize-handle {
-    position: absolute;
-    right: 0;
-    top: 0;
-    bottom: 0;
-    width: 4px;
-    cursor: col-resize;
-}
-.resize-handle:hover { background: #6366f1; }
 
 /* Collapsible sections */
 .collapsible-header {
