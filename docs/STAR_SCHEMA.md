@@ -5,8 +5,11 @@ A dimensional data model for Claude Code transcript analytics, with 25+ tables f
 ## Quick Start (CLI)
 
 ```bash
-# Generate star schema from local sessions
+# Generate star schema DuckDB from local sessions
 claude-code-transcripts local --format duckdb-star -o ./analytics
+
+# Or export to JSON directory structure
+claude-code-transcripts local --format json-star -o ./star-export/
 
 # Or generate from all sessions
 claude-code-transcripts all --format duckdb-star -o ./analytics
@@ -885,6 +888,76 @@ def my_insight_func(session_data):
 # Run session enrichment
 result = run_session_insights_enrichment(conn, my_insight_func)
 print(f"Enriched {result['sessions_enriched']} sessions")
+```
+
+### JSON Export
+
+Export the star schema to JSON format for use with other tools or data pipelines:
+
+```python
+from claude_code_transcripts import (
+    create_star_schema,
+    run_star_schema_etl,
+    create_semantic_model,
+)
+from claude_code_transcripts.star_schema import export_star_schema_to_json
+
+# Build the star schema in memory
+conn = create_star_schema(":memory:")
+run_star_schema_etl(conn, session_path, "My Project")
+create_semantic_model(conn)
+
+# Export to JSON directory structure
+export_star_schema_to_json(conn, "./star-export/")
+conn.close()
+```
+
+This creates:
+
+```
+star-export/
+  meta.json           # Schema metadata, table manifest, relationships
+  dimensions/
+    dim_tool.json
+    dim_model.json
+    dim_session.json
+    dim_project.json
+    dim_date.json
+    dim_time.json
+    ...               # 15 dimension tables total
+  facts/
+    fact_messages.json
+    fact_tool_calls.json
+    fact_session_summary.json
+    ...               # 12 fact tables total
+```
+
+**meta.json structure:**
+
+```json
+{
+  "version": "1.0",
+  "schema_type": "star",
+  "exported_at": "2025-01-13T10:30:00-05:00",
+  "tables": {
+    "dimensions": [
+      {"name": "dim_tool", "file": "dimensions/dim_tool.json", "row_count": 25}
+    ],
+    "facts": [
+      {"name": "fact_messages", "file": "facts/fact_messages.json", "row_count": 1234}
+    ]
+  },
+  "relationships": [
+    {"from_table": "fact_messages", "from_column": "session_key", "to_table": "dim_session", "to_column": "session_key"}
+  ]
+}
+```
+
+Or use the CLI:
+
+```bash
+# Export star schema to JSON directory
+claude-code-transcripts local --format json-star -o ./star-export/
 ```
 
 ## Design Decisions

@@ -27,6 +27,7 @@ claude-code-transcripts/
 │   │   ├── semantic.py       # Semantic model generation
 │   │   ├── extractors.py     # Code blocks, entities, file extraction
 │   │   ├── enrichment.py     # LLM enrichment functions
+│   │   ├── json_export.py    # JSON export for star schema
 │   │   └── utils.py          # Key generation, tool/model classification
 │   └── templates/
 │       ├── base.html
@@ -38,7 +39,8 @@ claude-code-transcripts/
 │           └── js/{app,state,duckdb,query-builder,ui}.js
 ├── tests/
 │   ├── test_claude_code_transcripts.py  # Core functionality tests
-│   └── test_star_schema.py              # Star schema & ETL tests (116 tests)
+│   ├── test_star_schema.py              # Star schema & ETL tests (116 tests)
+│   └── test_json_export.py              # JSON export tests (31 tests)
 ├── docs/
 │   ├── STAR_SCHEMA.md        # Star schema documentation
 │   └── DATA_EXPLORER.md      # Data explorer documentation
@@ -53,19 +55,22 @@ claude-code-transcripts/
 - `json` - Convert specific JSON/JSONL files
 - `all` - Batch convert all sessions
 
-### 2. DuckDB Exports
-Two database formats available:
+### 2. Export Formats
+Three output formats with two schema types:
 
-**Simple format (`--format duckdb`):**
-- `sessions`, `messages`, `tool_calls`, `thinking` tables
-- Flat structure for quick queries
+**Simple schema** (4 tables: `sessions`, `messages`, `tool_calls`, `thinking`):
+- `--format duckdb` - DuckDB database file
+- `--format json` - Single JSON file with nested tables
 
-**Star schema format (programmatic API):**
-- Dimensional model with facts and dimensions
-- Modular package at `star_schema/` (schema, etl, semantic, extractors, enrichment, utils)
-- See `create_star_schema()` and `run_star_schema_etl()` functions
+**Star schema** (25+ dimensional tables):
+- `--format duckdb-star` - DuckDB database file
+- `--format json-star` - Directory with meta.json + dimensions/*.json + facts/*.json
+- Modular package at `star_schema/` (schema, etl, semantic, extractors, enrichment, json_export, utils)
+- See `create_star_schema()`, `run_star_schema_etl()`, `export_star_schema_to_json()` functions
 - Visual explorer at `templates/data_explorer/`
 - Full documentation in docs/STAR_SCHEMA.md and docs/DATA_EXPLORER.md
+
+**Hybrid CLI**: Use `--schema simple|star` with `--format duckdb|json` for explicit control.
 
 ### 3. Star Schema Tables
 

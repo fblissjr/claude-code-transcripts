@@ -786,6 +786,38 @@ def _generate_search_index(projects, output_dir):
 
 
 # =============================================================================
+# Schema/Format Resolution
+# =============================================================================
+
+
+def resolve_schema_format(schema, output_format):
+    """Resolve schema and format from potentially compound format names.
+
+    Supports hybrid CLI: explicit --schema flag or compound format names like
+    'duckdb-star' or 'json-star'.
+
+    Args:
+        schema: Explicit schema ('simple' or 'star') or None
+        output_format: Format string ('html', 'duckdb', 'duckdb-star', 'json', 'json-star')
+
+    Returns:
+        Tuple of (resolved_schema, resolved_format)
+    """
+    # Handle compound format names
+    if output_format.endswith("-star"):
+        inferred_schema = "star"
+        actual_format = output_format.replace("-star", "")
+    else:
+        inferred_schema = "simple"
+        actual_format = output_format
+
+    # Explicit --schema overrides inference
+    final_schema = schema if schema else inferred_schema
+
+    return final_schema, actual_format
+
+
+# =============================================================================
 # DuckDB Export Functions
 # =============================================================================
 
@@ -1196,6 +1228,260 @@ def generate_duckdb_archive(
         "failed_sessions": failed_sessions,
         "output_dir": output_dir,
         "db_path": db_path,
+    }
+
+
+# =============================================================================
+# JSON Export Functions
+# =============================================================================
+
+
+def export_sessions_to_json(
+    session_paths, output_path, include_thinking=False, truncate_output=2000
+):
+    """Export sessions to JSON format (simple schema).
+
+    Args:
+        session_paths: List of paths to JSONL session files
+        output_path: Path for output JSON file
+        include_thinking: Whether to include thinking blocks
+        truncate_output: Max characters for tool output (default 2000)
+    """
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    sessions = []
+    messages = []
+    tool_calls = []
+    thinking_blocks = []
+
+    for session_path in session_paths:
+        session_data = _extract_session_data(
+            session_path, include_thinking, truncate_output
+        )
+        sessions.append(session_data["session"])
+        messages.extend(session_data["messages"])
+        tool_calls.extend(session_data["tool_calls"])
+        thinking_blocks.extend(session_data["thinking"])
+
+    result = {
+        "version": "1.0",
+        "schema_type": "simple",
+        "exported_at": datetime.now().astimezone().isoformat(),
+        "tables": {
+            "sessions": sessions,
+            "messages": messages,
+            "tool_calls": tool_calls,
+            "thinking": thinking_blocks,
+        },
+    }
+
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(result, f, indent=2, default=str)
+
+
+def _extract_session_data(session_path, include_thinking=False, truncate_output=2000):
+    """Extract session data from a JSONL file.
+
+    Args:
+        session_path: Path to the JSONL session file
+        include_thinking: Whether to include thinking blocks
+        truncate_output: Max characters for tool output
+
+    Returns:
+        dict with session, messages, tool_calls, thinking keys
+    """
+    session_path = Path(session_path)
+    session_id = session_path.stem
+    project_name = session_path.parent.name
+
+    session_meta = {
+        "session_id": session_id,
+        "project_name": project_name,
+        "project_path": str(session_path),
+        "cwd": None,
+        "git_branch": None,
+        "version": None,
+        "first_timestamp": None,
+        "last_timestamp": None,
+        "message_count": 0,
+        "user_message_count": 0,
+        "assistant_message_count": 0,
+        "tool_use_count": 0,
+        "is_agent": False,
+        "agent_id": None,
+        "parent_session_id": None,
+    }
+
+    messages = []
+    tool_calls = []
+    thinking_blocks = []
+    tool_use_map = {}  # tool_use_id -> tool info
+    thinking_id = 0
+    is_first = True
+
+    with open(session_path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            entry_type = entry.get("type")
+            if entry_type not in ("user", "assistant"):
+                continue
+
+            # Extract metadata from first entry
+            if is_first:
+                is_first = False
+                session_meta["cwd"] = entry.get("cwd")
+                session_meta["git_branch"] = entry.get("gitBranch")
+                session_meta["version"] = entry.get("version")
+                agent_id = entry.get("agentId")
+                session_meta["agent_id"] = agent_id
+                session_meta["is_agent"] = agent_id is not None
+                if agent_id:
+                    session_meta["parent_session_id"] = entry.get("sessionId")
+
+            uuid = entry.get("uuid", "")
+            parent_uuid = entry.get("parentUuid")
+            timestamp_str = entry.get("timestamp", "")
+            message_data = entry.get("message", {})
+            is_sidechain = entry.get("isSidechain", False)
+
+            # Parse timestamp
+            timestamp = None
+            if timestamp_str:
+                try:
+                    timestamp = datetime.fromisoformat(
+                        timestamp_str.replace("Z", "+00:00")
+                    )
+                    if session_meta["first_timestamp"] is None:
+                        session_meta["first_timestamp"] = timestamp_str
+                    session_meta["last_timestamp"] = timestamp_str
+                except ValueError:
+                    pass
+
+            # Extract content
+            content = message_data.get("content", "")
+            model = message_data.get("model")
+            has_tool_use = False
+            has_tool_result = False
+            has_thinking = False
+            text_content = ""
+
+            if isinstance(content, str):
+                text_content = content
+            elif isinstance(content, list):
+                text_parts = []
+                for block in content:
+                    if not isinstance(block, dict):
+                        continue
+                    block_type = block.get("type")
+
+                    if block_type == "text":
+                        text_parts.append(block.get("text", ""))
+
+                    elif block_type == "tool_use":
+                        has_tool_use = True
+                        session_meta["tool_use_count"] += 1
+                        tool_id = block.get("id", "")
+                        tool_name = block.get("name", "")
+                        tool_input = block.get("input", {})
+
+                        # Create summary of input
+                        if isinstance(tool_input, dict):
+                            input_summary = json.dumps(tool_input)[:truncate_output]
+                        else:
+                            input_summary = str(tool_input)[:truncate_output]
+
+                        tool_use_map[tool_id] = {
+                            "tool_use_id": tool_id,
+                            "session_id": session_id,
+                            "message_id": uuid,
+                            "tool_name": tool_name,
+                            "input_json": tool_input,
+                            "input_summary": input_summary,
+                            "timestamp": timestamp_str,
+                        }
+
+                    elif block_type == "tool_result":
+                        has_tool_result = True
+                        tool_id = block.get("tool_use_id", "")
+                        result_content = block.get("content", "")
+                        if isinstance(result_content, str):
+                            output_text = result_content[:truncate_output]
+                        else:
+                            output_text = str(result_content)[:truncate_output]
+
+                        # Link to tool_use
+                        if tool_id in tool_use_map:
+                            tool_info = tool_use_map[tool_id]
+                            tool_info["result_message_id"] = uuid
+                            tool_info["output_text"] = output_text
+                            tool_calls.append(tool_info)
+                            del tool_use_map[tool_id]
+
+                    elif block_type == "thinking":
+                        has_thinking = True
+                        if include_thinking:
+                            thinking_text = block.get("thinking", "")
+                            thinking_id += 1
+                            thinking_blocks.append(
+                                {
+                                    "id": thinking_id,
+                                    "session_id": session_id,
+                                    "message_id": uuid,
+                                    "thinking_text": thinking_text,
+                                    "timestamp": timestamp_str,
+                                }
+                            )
+
+                text_content = " ".join(text_parts)
+
+            # Count messages
+            if entry_type == "user":
+                session_meta["user_message_count"] += 1
+            else:
+                session_meta["assistant_message_count"] += 1
+
+            # Add message
+            messages.append(
+                {
+                    "id": uuid,
+                    "session_id": session_id,
+                    "parent_id": parent_uuid,
+                    "type": entry_type,
+                    "timestamp": timestamp_str,
+                    "model": model,
+                    "content": text_content,
+                    "content_json": content if isinstance(content, list) else None,
+                    "has_tool_use": has_tool_use,
+                    "has_tool_result": has_tool_result,
+                    "has_thinking": has_thinking,
+                    "is_sidechain": is_sidechain,
+                }
+            )
+
+    # Add any remaining tool uses (no result received)
+    for tool_info in tool_use_map.values():
+        tool_info["result_message_id"] = None
+        tool_info["output_text"] = None
+        tool_calls.append(tool_info)
+
+    session_meta["message_count"] = (
+        session_meta["user_message_count"] + session_meta["assistant_message_count"]
+    )
+
+    return {
+        "session": session_meta,
+        "messages": messages,
+        "tool_calls": tool_calls,
+        "thinking": thinking_blocks,
     }
 
 
@@ -2397,9 +2683,16 @@ def cli():
 @click.option(
     "--format",
     "output_format",
-    type=click.Choice(["html", "duckdb", "duckdb-star"]),
+    type=click.Choice(["html", "duckdb", "duckdb-star", "json", "json-star"]),
     default="html",
-    help="Output format: html (default), duckdb, or duckdb-star (star schema).",
+    help="Output format: html (default), duckdb[-star], or json[-star].",
+)
+@click.option(
+    "--schema",
+    "schema_type",
+    type=click.Choice(["simple", "star"]),
+    default=None,
+    help="Data schema: simple (4 tables) or star (dimensional). Auto-inferred from format.",
 )
 @click.option(
     "--include-subagents",
@@ -2409,7 +2702,7 @@ def cli():
 @click.option(
     "--include-thinking",
     is_flag=True,
-    help="Include thinking blocks in DuckDB export (can be large).",
+    help="Include thinking blocks in DuckDB/JSON export (can be large).",
 )
 def local_cmd(
     output,
@@ -2420,6 +2713,7 @@ def local_cmd(
     open_browser,
     limit,
     output_format,
+    schema_type,
     include_subagents,
     include_thinking,
 ):
@@ -2505,8 +2799,11 @@ def local_cmd(
 
     output = Path(output)
 
+    # Resolve schema and format from potentially compound format names
+    schema, fmt = resolve_schema_format(schema_type, output_format)
+
     # Execute based on format
-    if output_format == "html":
+    if fmt == "html":
         if len(selected) == 1 and not agent_map:
             # Single session, no agents - use existing simple path
             generate_html(selected[0], output, github_repo=repo)
@@ -2521,13 +2818,13 @@ def local_cmd(
             generate_multi_session_index(output, selected, agent_map=agent_map)
             click.echo(f"Generated {len(selected)} session(s) with master index")
 
-    elif output_format in ("duckdb", "duckdb-star"):
+    elif fmt == "duckdb":
         db_path = (
             output.with_suffix(".duckdb") if output.suffix != ".duckdb" else output
         )
         db_path.parent.mkdir(parents=True, exist_ok=True)
 
-        if output_format == "duckdb":
+        if schema == "simple":
             conn = create_duckdb_schema(db_path)
             for idx, session_file in enumerate(selected, 1):
                 click.echo(f"[{idx}/{len(selected)}] {session_file.name}")
@@ -2538,7 +2835,7 @@ def local_cmd(
                     include_thinking=include_thinking,
                 )
             conn.close()
-        else:
+        else:  # star schema
             conn = create_star_schema(db_path)
             for idx, session_file in enumerate(selected, 1):
                 click.echo(f"[{idx}/{len(selected)}] {session_file.name}")
@@ -2555,18 +2852,52 @@ def local_cmd(
         click.echo(f"Exported to {db_path}")
         return  # Skip browser open for DuckDB
 
+    elif fmt == "json":
+        if schema == "simple":
+            json_path = (
+                output.with_suffix(".json") if output.suffix != ".json" else output
+            )
+            json_path.parent.mkdir(parents=True, exist_ok=True)
+            click.echo(f"Exporting {len(selected)} session(s) to JSON...")
+            export_sessions_to_json(
+                selected, json_path, include_thinking=include_thinking
+            )
+            click.echo(f"Exported to {json_path}")
+        else:  # star schema
+            # Star schema JSON exports to a directory
+            output_dir = output if output.suffix == "" else output.with_suffix("")
+            output_dir.mkdir(parents=True, exist_ok=True)
+            click.echo(f"Exporting {len(selected)} session(s) to star schema JSON...")
+            # First create DuckDB in memory, then export to JSON
+            from .star_schema import export_star_schema_to_json
+
+            conn = create_star_schema(":memory:")
+            for idx, session_file in enumerate(selected, 1):
+                click.echo(f"[{idx}/{len(selected)}] {session_file.name}")
+                run_star_schema_etl(
+                    conn,
+                    session_file,
+                    session_file.parent.name,
+                    include_thinking=include_thinking,
+                )
+            create_semantic_model(conn)
+            export_star_schema_to_json(conn, output_dir)
+            conn.close()
+            click.echo(f"Exported to {output_dir}/")
+        return  # Skip browser open for JSON
+
     # Show output directory
     click.echo(f"Output: {output.resolve()}")
 
     # Copy JSONL file to output directory if requested
-    if include_json and output_format == "html":
+    if include_json and fmt == "html":
         output.mkdir(exist_ok=True)
         for session_file in selected:
             json_dest = output / session_file.name
             shutil.copy(session_file, json_dest)
         click.echo(f"Copied {len(selected)} JSONL file(s)")
 
-    if gist and output_format == "html" and len(selected) == 1:
+    if gist and fmt == "html" and len(selected) == 1:
         # Inject gist preview JS and create gist
         inject_gist_preview_js(output)
         click.echo("Creating GitHub gist...")
@@ -2578,7 +2909,7 @@ def local_cmd(
         click.echo("Warning: --gist only supported for single HTML session export")
 
     # Open browser if requested
-    if open_browser and output_format == "html":
+    if open_browser and fmt == "html":
         # For multiple sessions or agents, open the master index
         index_url = (output / "index.html").resolve().as_uri()
         webbrowser.open(index_url)

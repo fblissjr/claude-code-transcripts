@@ -175,8 +175,9 @@ Options:
 - `--open` - open the generated archive in your default browser
 - `-q, --quiet` - suppress all output except errors
 - `--no-search-index` - skip generating the search index for faster/smaller output
-- `--format FORMAT` - output format: `html` (default), `duckdb`, or `both`
-- `--include-thinking` - include thinking blocks in DuckDB export (opt-in)
+- `--format FORMAT` - output format: `html` (default), `duckdb`, `duckdb-star`, `json`, `json-star`, or `both`
+- `--schema SCHEMA` - data schema: `simple` (4 tables) or `star` (dimensional). Auto-inferred from format
+- `--include-thinking` - include thinking blocks in DuckDB/JSON export (opt-in)
 
 Examples:
 
@@ -198,6 +199,12 @@ claude-code-transcripts all --format duckdb -o ./my-archive
 
 # Export both HTML and DuckDB
 claude-code-transcripts all --format both -o ./my-archive
+
+# Export to JSON (simple schema)
+claude-code-transcripts local --format json -o ./sessions.json
+
+# Export to JSON (star schema - directory structure)
+claude-code-transcripts local --format json-star -o ./star-export/
 ```
 
 ### DuckDB export
@@ -291,6 +298,65 @@ GROUP BY dt.time_of_day;
 **Data Explorer features:** Type-aware columns, automatic joins, filter autocomplete, live SQL preview.
 
 See [docs/STAR_SCHEMA.md](docs/STAR_SCHEMA.md) for complete schema documentation, all example queries, Python API reference, and advanced use cases. See [docs/DATA_EXPLORER.md](docs/DATA_EXPLORER.md) for the visual explorer.
+
+### JSON export
+
+Export sessions to JSON format for integration with other tools, data pipelines, or archival purposes.
+
+**Simple schema** (`--format json`): Single JSON file with 4 tables:
+
+```bash
+claude-code-transcripts local --format json -o ./sessions.json
+```
+
+Output structure:
+```json
+{
+  "version": "1.0",
+  "schema_type": "simple",
+  "exported_at": "2025-01-13T10:30:00Z",
+  "tables": {
+    "sessions": [...],
+    "messages": [...],
+    "tool_calls": [...],
+    "thinking": [...]
+  }
+}
+```
+
+**Star schema** (`--format json-star`): Directory structure with separate files per table:
+
+```bash
+claude-code-transcripts local --format json-star -o ./star-export/
+```
+
+Output structure:
+```
+star-export/
+  meta.json           # Schema metadata, table manifest, relationships
+  dimensions/
+    dim_tool.json
+    dim_model.json
+    dim_session.json
+    ...               # 15 dimension tables
+  facts/
+    fact_messages.json
+    fact_tool_calls.json
+    ...               # 12 fact tables
+```
+
+The `meta.json` file includes:
+- Table manifest with row counts
+- Relationship definitions (foreign keys)
+- Schema version for compatibility
+
+**Hybrid CLI**: You can also use the explicit `--schema` flag:
+
+```bash
+# These are equivalent:
+claude-code-transcripts local --format json-star
+claude-code-transcripts local --schema star --format json
+```
 
 ## Development
 

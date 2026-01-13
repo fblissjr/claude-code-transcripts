@@ -5,8 +5,14 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **JSON export format**: Export sessions to JSON in addition to HTML and DuckDB
+  - `--format json`: Simple schema (sessions, messages, tool_calls, thinking) in single JSON file
+  - `--format json-star`: Star schema exported as directory structure (meta.json + dimensions/*.json + facts/*.json)
+  - New `--schema` option to explicitly set schema type (`simple` or `star`)
+  - Backwards-compatible: compound format names (`duckdb-star`, `json-star`) still work
+  - New functions: `resolve_schema_format()`, `export_sessions_to_json()`, `export_star_schema_to_json()`
 - **Multi-select for local command**: Select multiple sessions using SPACE, confirm with ENTER
-- **DuckDB export from local command**: New `--format` option supports `html`, `duckdb`, or `duckdb-star`
+- **DuckDB export from local command**: New `--format` option supports `html`, `duckdb`, `duckdb-star`, `json`, or `json-star`
 - **Subagent support**: New `--include-subagents` flag auto-includes related agent sessions (recursive)
 - **Agent metadata in DuckDB**: Sessions and messages now track agent relationships
   - Sessions table: `is_agent`, `agent_id`, `parent_session_id`, `depth_level` columns

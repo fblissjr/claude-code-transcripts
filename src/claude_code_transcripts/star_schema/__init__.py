@@ -5,10 +5,12 @@ This package provides:
 - Semantic model generation for data exploration
 - ETL pipeline for loading session data
 - LLM enrichment pipeline for message classification
+- JSON export for star schema data
 """
 
 from .enrichment import run_llm_enrichment, run_session_insights_enrichment
 from .etl import run_star_schema_etl
+from .json_export import export_star_schema_to_json
 from .schema import create_star_schema
 from .semantic import create_semantic_model
 from .utils import (
@@ -26,6 +28,8 @@ __all__ = [
     "create_semantic_model",
     # ETL
     "run_star_schema_etl",
+    # JSON export
+    "export_star_schema_to_json",
     # LLM enrichment
     "run_llm_enrichment",
     "run_session_insights_enrichment",
