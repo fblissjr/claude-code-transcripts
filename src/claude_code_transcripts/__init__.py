@@ -2854,9 +2854,13 @@ def local_cmd(
 
     elif fmt == "json":
         if schema == "simple":
-            json_path = (
-                output.with_suffix(".json") if output.suffix != ".json" else output
-            )
+            # Handle directory paths (like ".") - generate default filename
+            if output.is_dir() or output.name == "" or output.suffix == "":
+                json_path = output / "sessions.json"
+            elif output.suffix != ".json":
+                json_path = output.with_suffix(".json")
+            else:
+                json_path = output
             json_path.parent.mkdir(parents=True, exist_ok=True)
             click.echo(f"Exporting {len(selected)} session(s) to JSON...")
             export_sessions_to_json(
@@ -2865,7 +2869,13 @@ def local_cmd(
             click.echo(f"Exported to {json_path}")
         else:  # star schema
             # Star schema JSON exports to a directory
-            output_dir = output if output.suffix == "" else output.with_suffix("")
+            # Handle paths like "." or paths with extensions
+            if output.is_dir() or output.name in ("", "."):
+                output_dir = output / "star_schema"
+            elif output.suffix != "":
+                output_dir = output.with_suffix("")
+            else:
+                output_dir = output
             output_dir.mkdir(parents=True, exist_ok=True)
             click.echo(f"Exporting {len(selected)} session(s) to star schema JSON...")
             # First create DuckDB in memory, then export to JSON
