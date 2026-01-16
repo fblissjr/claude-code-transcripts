@@ -309,11 +309,16 @@ def _get_jsonl_summary(filepath, max_length=200):
     return "(no summary)"
 
 
-def find_local_sessions(folder, limit=10):
+def find_local_sessions(folder, limit=10, project_filter=None):
     """Find recent JSONL session files in the given folder.
 
     Returns a list of (Path, summary) tuples sorted by modification time.
     Excludes agent files and warmup/empty sessions.
+
+    Args:
+        folder: Path to the projects folder
+        limit: Maximum number of sessions to return
+        project_filter: Optional filter for project names (partial, case-insensitive)
     """
     folder = Path(folder)
     if not folder.exists():
@@ -322,6 +327,8 @@ def find_local_sessions(folder, limit=10):
     results = []
     for f in folder.glob("**/*.jsonl"):
         if f.name.startswith("agent-"):
+            continue
+        if project_filter and not matches_project_filter(f.parent.name, project_filter):
             continue
         summary = get_session_summary(f)
         # Skip boring/empty sessions
@@ -513,7 +520,23 @@ def get_project_display_name(folder_name):
     return folder_name
 
 
-def find_all_sessions(folder, include_agents=False):
+def matches_project_filter(folder_name: str, project_filter: str | None) -> bool:
+    """Check if project folder matches filter (partial, case-insensitive).
+
+    Args:
+        folder_name: The raw folder name (e.g., "-home-user-projects-myproject")
+        project_filter: Filter string to match against, or None for no filtering
+
+    Returns:
+        True if the filter matches or is None/empty, False otherwise
+    """
+    if not project_filter:
+        return True
+    display_name = get_project_display_name(folder_name)
+    return project_filter.lower() in display_name.lower()
+
+
+def find_all_sessions(folder, include_agents=False, project_filter=None):
     """Find all sessions in a Claude projects folder, grouped by project.
 
     Returns a list of project dicts, each containing:
@@ -523,6 +546,11 @@ def find_all_sessions(folder, include_agents=False):
 
     Sessions are sorted by modification time (most recent first) within each project.
     Projects are sorted by their most recent session.
+
+    Args:
+        folder: Path to the projects folder
+        include_agents: Whether to include agent-* session files
+        project_filter: Optional filter for project names (partial, case-insensitive)
     """
     folder = Path(folder)
     if not folder.exists():
@@ -533,6 +561,12 @@ def find_all_sessions(folder, include_agents=False):
     for session_file in folder.glob("**/*.jsonl"):
         # Skip agent files unless requested
         if not include_agents and session_file.name.startswith("agent-"):
+            continue
+
+        # Skip projects that don't match filter
+        if project_filter and not matches_project_filter(
+            session_file.parent.name, project_filter
+        ):
             continue
 
         # Get summary and skip boring sessions
@@ -2681,6 +2715,12 @@ def cli():
     help="Maximum number of sessions to show (default: 10)",
 )
 @click.option(
+    "-p",
+    "--project",
+    "project_filter",
+    help="Filter by project name (partial match, case-insensitive).",
+)
+@click.option(
     "--format",
     "output_format",
     type=click.Choice(["html", "duckdb", "duckdb-star", "json", "json-star"]),
@@ -2712,6 +2752,7 @@ def local_cmd(
     include_json,
     open_browser,
     limit,
+    project_filter,
     output_format,
     schema_type,
     include_subagents,
@@ -2729,7 +2770,9 @@ def local_cmd(
         return
 
     click.echo("Loading local sessions...")
-    results = find_local_sessions(projects_folder, limit=limit)
+    results = find_local_sessions(
+        projects_folder, limit=limit, project_filter=project_filter
+    )
 
     if not results:
         click.echo("No local sessions found.")
@@ -3439,6 +3482,12 @@ def web_cmd(
     help="Include agent-* session files (excluded by default).",
 )
 @click.option(
+    "-p",
+    "--project",
+    "project_filter",
+    help="Filter by project name (partial match, case-insensitive).",
+)
+@click.option(
     "--dry-run",
     is_flag=True,
     help="Show what would be converted without creating files.",
@@ -3476,6 +3525,7 @@ def all_cmd(
     source,
     output,
     include_agents,
+    project_filter,
     dry_run,
     open_browser,
     quiet,
@@ -3504,7 +3554,9 @@ def all_cmd(
     if not quiet:
         click.echo(f"Scanning {source}...")
 
-    projects = find_all_sessions(source, include_agents=include_agents)
+    projects = find_all_sessions(
+        source, include_agents=include_agents, project_filter=project_filter
+    )
 
     if not projects:
         if not quiet:

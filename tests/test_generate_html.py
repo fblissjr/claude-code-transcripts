@@ -1279,6 +1279,86 @@ class TestFindLocalSessions:
         results = find_local_sessions(tmp_path / ".claude" / "projects", limit=3)
         assert len(results) == 3
 
+    def test_project_filter_matches_project(self, tmp_path):
+        """Test filtering sessions by project name."""
+        projects_dir = tmp_path / ".claude" / "projects"
+
+        # Create two project directories
+        project_a = projects_dir / "-home-user-projects-project-alpha"
+        project_a.mkdir(parents=True)
+        project_b = projects_dir / "-home-user-projects-project-beta"
+        project_b.mkdir(parents=True)
+
+        # Create sessions in each project
+        session_a = project_a / "session-a.jsonl"
+        session_a.write_text(
+            '{"type":"summary","summary":"Alpha session"}\n'
+            '{"type":"user","timestamp":"2025-01-01T00:00:00Z","message":{"role":"user","content":"test"}}\n'
+        )
+        session_b = project_b / "session-b.jsonl"
+        session_b.write_text(
+            '{"type":"summary","summary":"Beta session"}\n'
+            '{"type":"user","timestamp":"2025-01-01T00:00:00Z","message":{"role":"user","content":"test"}}\n'
+        )
+
+        # Filter by "alpha" - should only get alpha project sessions
+        results = find_local_sessions(projects_dir, limit=10, project_filter="alpha")
+        assert len(results) == 1
+        assert results[0][1] == "Alpha session"
+
+    def test_project_filter_case_insensitive(self, tmp_path):
+        """Test that project filter is case-insensitive."""
+        projects_dir = tmp_path / ".claude" / "projects"
+        project = projects_dir / "-home-user-projects-MyProject"
+        project.mkdir(parents=True)
+
+        session = project / "session.jsonl"
+        session.write_text(
+            '{"type":"summary","summary":"Test session"}\n'
+            '{"type":"user","timestamp":"2025-01-01T00:00:00Z","message":{"role":"user","content":"test"}}\n'
+        )
+
+        # Filter with different case
+        results = find_local_sessions(
+            projects_dir, limit=10, project_filter="MYPROJECT"
+        )
+        assert len(results) == 1
+
+    def test_project_filter_partial_match(self, tmp_path):
+        """Test that partial project names match."""
+        projects_dir = tmp_path / ".claude" / "projects"
+        project = projects_dir / "-home-user-projects-claude-code-transcripts"
+        project.mkdir(parents=True)
+
+        session = project / "session.jsonl"
+        session.write_text(
+            '{"type":"summary","summary":"Transcripts session"}\n'
+            '{"type":"user","timestamp":"2025-01-01T00:00:00Z","message":{"role":"user","content":"test"}}\n'
+        )
+
+        # Filter with partial name
+        results = find_local_sessions(
+            projects_dir, limit=10, project_filter="transcript"
+        )
+        assert len(results) == 1
+
+    def test_project_filter_no_match(self, tmp_path):
+        """Test that non-matching filter returns empty."""
+        projects_dir = tmp_path / ".claude" / "projects"
+        project = projects_dir / "-home-user-projects-myproject"
+        project.mkdir(parents=True)
+
+        session = project / "session.jsonl"
+        session.write_text(
+            '{"type":"summary","summary":"Test session"}\n'
+            '{"type":"user","timestamp":"2025-01-01T00:00:00Z","message":{"role":"user","content":"test"}}\n'
+        )
+
+        results = find_local_sessions(
+            projects_dir, limit=10, project_filter="nonexistent"
+        )
+        assert len(results) == 0
+
 
 class TestLocalSessionCLI:
     """Tests for CLI behavior with local sessions."""

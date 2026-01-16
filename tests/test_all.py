@@ -11,6 +11,7 @@ from claude_code_transcripts import (
     find_all_sessions,
     get_project_display_name,
     generate_batch_html,
+    matches_project_filter,
 )
 
 
@@ -88,6 +89,51 @@ class TestGetProjectDisplayName:
         assert get_project_display_name("simple-project") == "simple-project"
 
 
+class TestMatchesProjectFilter:
+    """Tests for matches_project_filter function."""
+
+    def test_returns_true_when_no_filter(self):
+        """Test that None filter matches everything."""
+        assert matches_project_filter("-home-user-projects-myproject", None) is True
+
+    def test_returns_true_when_empty_filter(self):
+        """Test that empty string filter matches everything."""
+        assert matches_project_filter("-home-user-projects-myproject", "") is True
+
+    def test_partial_match_works(self):
+        """Test that partial matches work."""
+        assert matches_project_filter("-home-user-projects-myproject", "myproj") is True
+        assert (
+            matches_project_filter("-home-user-projects-myproject", "project") is True
+        )
+
+    def test_case_insensitive_match(self):
+        """Test that matching is case-insensitive."""
+        assert (
+            matches_project_filter("-home-user-projects-MyProject", "myproject") is True
+        )
+        assert (
+            matches_project_filter("-home-user-projects-myproject", "MYPROJECT") is True
+        )
+        assert (
+            matches_project_filter("-home-user-projects-MyProject", "MyProject") is True
+        )
+
+    def test_no_match_returns_false(self):
+        """Test that non-matching filter returns False."""
+        assert matches_project_filter("-home-user-projects-myproject", "other") is False
+        assert matches_project_filter("-home-user-projects-myproject", "xyz") is False
+
+    def test_matches_display_name_not_raw_folder(self):
+        """Test that filter matches against display name, not raw folder name."""
+        # The display name for this would be "myproject", not the full path
+        assert (
+            matches_project_filter("-home-user-projects-myproject", "myproject") is True
+        )
+        # Searching for "home" should not match since it's not in display name
+        assert matches_project_filter("-home-user-projects-myproject", "home") is False
+
+
 class TestFindAllSessions:
     """Tests for find_all_sessions function."""
 
@@ -162,6 +208,39 @@ class TestFindAllSessions:
         for session in project_a["sessions"]:
             assert "summary" in session
             assert session["summary"] != "(no summary)"
+
+    def test_project_filter_exact_match(self, mock_projects_dir):
+        """Test filtering by exact project name."""
+        result = find_all_sessions(mock_projects_dir, project_filter="project-a")
+
+        assert len(result) == 1
+        assert result[0]["name"] == "project-a"
+
+    def test_project_filter_partial_match(self, mock_projects_dir):
+        """Test filtering by partial project name."""
+        # Both project-a and project-b contain "project"
+        result = find_all_sessions(mock_projects_dir, project_filter="project")
+
+        assert len(result) == 2
+
+    def test_project_filter_case_insensitive(self, mock_projects_dir):
+        """Test that project filter is case-insensitive."""
+        result = find_all_sessions(mock_projects_dir, project_filter="PROJECT-A")
+
+        assert len(result) == 1
+        assert result[0]["name"] == "project-a"
+
+    def test_project_filter_no_match(self, mock_projects_dir):
+        """Test filter that matches no projects."""
+        result = find_all_sessions(mock_projects_dir, project_filter="nonexistent")
+
+        assert len(result) == 0
+
+    def test_project_filter_none_returns_all(self, mock_projects_dir):
+        """Test that None filter returns all projects."""
+        result = find_all_sessions(mock_projects_dir, project_filter=None)
+
+        assert len(result) == 2
 
 
 class TestGenerateBatchHtml:
