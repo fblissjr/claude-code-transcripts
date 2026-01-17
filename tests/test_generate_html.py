@@ -27,6 +27,7 @@ from claude_code_transcripts import (
     parse_session_file,
     get_session_summary,
     find_local_sessions,
+    extract_session_slug,
 )
 
 
@@ -1718,3 +1719,398 @@ class TestSearchFeature:
 
         # Total pages should be embedded for JS to know how many pages to fetch
         assert "totalPages" in index_html or "total_pages" in index_html
+
+
+class TestExtractSessionSlug:
+    """Tests for extract_session_slug which extracts the slug field from session files."""
+
+    def test_extracts_slug_from_first_line(self, tmp_path):
+        """Test extracting slug from session file first line."""
+        project = tmp_path / "project"
+        project.mkdir()
+
+        session = project / "session.jsonl"
+        session.write_text(
+            '{"type":"summary","slug":"cozy-imagining-karp","sessionId":"abc123"}\n'
+            '{"type":"user","message":{"content":"Hello"}}\n'
+        )
+
+        slug = extract_session_slug(session)
+        assert slug == "cozy-imagining-karp"
+
+    def test_returns_none_for_no_slug(self, tmp_path):
+        """Test returning None when no slug is present."""
+        project = tmp_path / "project"
+        project.mkdir()
+
+        session = project / "session.jsonl"
+        session.write_text(
+            '{"type":"user","message":{"content":"Hello"}}\n'
+            '{"type":"assistant","message":{"content":"Hi"}}\n'
+        )
+
+        slug = extract_session_slug(session)
+        assert slug is None
+
+    def test_handles_empty_file(self, tmp_path):
+        """Test handling empty files gracefully."""
+        project = tmp_path / "project"
+        project.mkdir()
+
+        session = project / "session.jsonl"
+        session.write_text("")
+
+        slug = extract_session_slug(session)
+        assert slug is None
+
+    def test_handles_invalid_json(self, tmp_path):
+        """Test handling files with invalid JSON."""
+        project = tmp_path / "project"
+        project.mkdir()
+
+        session = project / "session.jsonl"
+        session.write_text("not valid json\n")
+
+        slug = extract_session_slug(session)
+        assert slug is None
+
+    def test_handles_nonexistent_file(self, tmp_path):
+        """Test handling nonexistent files."""
+        session = tmp_path / "nonexistent.jsonl"
+
+        slug = extract_session_slug(session)
+        assert slug is None
+
+    def test_finds_slug_in_any_line(self, tmp_path):
+        """Test that slug can be found even if not in first line."""
+        project = tmp_path / "project"
+        project.mkdir()
+
+        # Slug might appear in a later line in some formats
+        session = project / "session.jsonl"
+        session.write_text(
+            '{"type":"user","message":{"content":"Hello"}}\n'
+            '{"type":"summary","slug":"later-appearing-slug"}\n'
+        )
+
+        slug = extract_session_slug(session)
+        assert slug == "later-appearing-slug"
+
+
+class TestFindLocalSessionsWithSlugs:
+    """Tests for find_local_sessions returning slug information."""
+
+    def test_returns_slug_in_tuple(self, tmp_path):
+        """Test that find_local_sessions returns (filepath, summary, slug) tuples."""
+        projects_dir = tmp_path / ".claude" / "projects"
+        project = projects_dir / "test-project"
+        project.mkdir(parents=True)
+
+        session = project / "session.jsonl"
+        session.write_text(
+            '{"type":"summary","summary":"Test session","slug":"my-test-slug"}\n'
+            '{"type":"user","timestamp":"2025-01-01T00:00:00Z","message":{"role":"user","content":"Hello"}}\n'
+        )
+
+        results = find_local_sessions(projects_dir, limit=10)
+        assert len(results) == 1
+        assert len(results[0]) == 3  # (filepath, summary, slug)
+        assert results[0][0] == session
+        assert results[0][1] == "Test session"
+        assert results[0][2] == "my-test-slug"
+
+    def test_returns_none_slug_when_missing(self, tmp_path):
+        """Test that sessions without slug return None for slug."""
+        projects_dir = tmp_path / ".claude" / "projects"
+        project = projects_dir / "test-project"
+        project.mkdir(parents=True)
+
+        session = project / "session.jsonl"
+        session.write_text(
+            '{"type":"summary","summary":"No slug session"}\n'
+            '{"type":"user","timestamp":"2025-01-01T00:00:00Z","message":{"role":"user","content":"Hello"}}\n'
+        )
+
+        results = find_local_sessions(projects_dir, limit=10)
+        assert len(results) == 1
+        assert results[0][2] is None
+
+    def test_groups_sessions_by_slug(self, tmp_path):
+        """Test that sessions with same slug can be identified as related."""
+        import time
+
+        projects_dir = tmp_path / ".claude" / "projects"
+        project = projects_dir / "test-project"
+        project.mkdir(parents=True)
+
+        # Create two sessions with the same slug (conversation chain)
+        session1 = project / "session1.jsonl"
+        session1.write_text(
+            '{"type":"summary","summary":"First session","slug":"shared-conversation"}\n'
+            '{"type":"user","timestamp":"2025-01-01T00:00:00Z","message":{"role":"user","content":"Hello"}}\n'
+        )
+        time.sleep(0.1)  # Ensure different mtime
+
+        session2 = project / "session2.jsonl"
+        session2.write_text(
+            '{"type":"summary","summary":"Second session","slug":"shared-conversation"}\n'
+            '{"type":"user","timestamp":"2025-01-02T00:00:00Z","message":{"role":"user","content":"Continue"}}\n'
+        )
+        time.sleep(0.1)
+
+        # Create a session with a different slug
+        session3 = project / "session3.jsonl"
+        session3.write_text(
+            '{"type":"summary","summary":"Different conversation","slug":"another-slug"}\n'
+            '{"type":"user","timestamp":"2025-01-03T00:00:00Z","message":{"role":"user","content":"New"}}\n'
+        )
+
+        results = find_local_sessions(projects_dir, limit=10)
+        assert len(results) == 3
+
+        # Group by slug manually to verify
+        slugs = [r[2] for r in results]
+        assert slugs.count("shared-conversation") == 2
+        assert slugs.count("another-slug") == 1
+
+
+class TestBuildSessionChoices:
+    """Tests for build_session_choices which creates questionary choices."""
+
+    def test_collapsed_chains_groups_sessions_by_slug(self, tmp_path):
+        """Test that collapsed mode groups sessions with same slug into single choice."""
+        from claude_code_transcripts import build_session_choices
+
+        projects_dir = tmp_path / ".claude" / "projects"
+        project = projects_dir / "test-project"
+        project.mkdir(parents=True)
+
+        # Create chain of 3 sessions with same slug
+        for i in range(3):
+            session = project / f"session{i}.jsonl"
+            session.write_text(
+                f'{{"type":"summary","summary":"Session {i}","slug":"my-chain"}}\n'
+                f'{{"type":"user","timestamp":"2025-01-0{i+1}T00:00:00Z","message":{{"role":"user","content":"Hello"}}}}\n'
+            )
+
+        # Create a standalone session (no slug)
+        standalone = project / "standalone.jsonl"
+        standalone.write_text(
+            '{"type":"summary","summary":"Standalone session"}\n'
+            '{"type":"user","timestamp":"2025-01-04T00:00:00Z","message":{"role":"user","content":"Hi"}}\n'
+        )
+
+        sessions_by_project = {"test-project": []}
+        for f in sorted(project.glob("*.jsonl")):
+            summary = f"Summary for {f.stem}"
+            slug = "my-chain" if "session" in f.stem else None
+            sessions_by_project["test-project"].append((f, summary, slug))
+
+        choices = build_session_choices(sessions_by_project, expand_chains=False)
+
+        # Filter out Separator objects
+        import questionary
+
+        value_choices = [c for c in choices if not isinstance(c, questionary.Separator)]
+
+        # Should have 2 choices: 1 chain (with 3 sessions) + 1 standalone
+        assert len(value_choices) == 2
+
+        # Find the chain choice - its value should be a list
+        chain_choice = None
+        standalone_choice = None
+        for c in value_choices:
+            if isinstance(c.value, list):
+                chain_choice = c
+            else:
+                standalone_choice = c
+
+        assert chain_choice is not None, "Should have a chain choice with list value"
+        assert len(chain_choice.value) == 3, "Chain should contain 3 session paths"
+        assert standalone_choice is not None, "Should have standalone choice"
+
+    def test_collapsed_chain_shows_metadata(self, tmp_path):
+        """Test that collapsed chain shows session count and date range."""
+        from claude_code_transcripts import build_session_choices
+        import questionary
+
+        projects_dir = tmp_path / ".claude" / "projects"
+        project = projects_dir / "test-project"
+        project.mkdir(parents=True)
+
+        # Create chain of 2 sessions
+        session1 = project / "session1.jsonl"
+        session1.write_text(
+            '{"type":"summary","summary":"First","slug":"test-chain"}\n'
+            '{"type":"user","timestamp":"2025-01-01T00:00:00Z","message":{"role":"user","content":"Hello"}}\n'
+        )
+        session2 = project / "session2.jsonl"
+        session2.write_text(
+            '{"type":"summary","summary":"Second","slug":"test-chain"}\n'
+            '{"type":"user","timestamp":"2025-01-02T00:00:00Z","message":{"role":"user","content":"Hello"}}\n'
+        )
+
+        sessions_by_project = {
+            "test-project": [
+                (session1, "First", "test-chain"),
+                (session2, "Second", "test-chain"),
+            ]
+        }
+
+        choices = build_session_choices(sessions_by_project, expand_chains=False)
+        value_choices = [c for c in choices if not isinstance(c, questionary.Separator)]
+
+        assert len(value_choices) == 1
+        chain_choice = value_choices[0]
+
+        # Title should show session count and slug on first line
+        assert "[2 sessions]" in chain_choice.title
+        assert "test-chain" in chain_choice.title
+
+        # Multi-line format should include size, date range, and latest summary
+        assert "KB" in chain_choice.title
+        assert "\n" in chain_choice.title  # Multi-line
+
+    def test_collapsed_chain_shows_latest_summary(self, tmp_path):
+        """Test that collapsed chain shows the summary from the most recent session."""
+        from claude_code_transcripts import build_session_choices
+        import questionary
+        import time
+
+        projects_dir = tmp_path / ".claude" / "projects"
+        project = projects_dir / "test-project"
+        project.mkdir(parents=True)
+
+        # Create older session
+        session1 = project / "session1.jsonl"
+        session1.write_text(
+            '{"type":"summary","summary":"Old summary from first session","slug":"test-chain"}\n'
+            '{"type":"user","timestamp":"2025-01-01T00:00:00Z","message":{"role":"user","content":"Hello"}}\n'
+        )
+        time.sleep(0.1)  # Ensure different mtime
+
+        # Create newer session (should be displayed)
+        session2 = project / "session2.jsonl"
+        session2.write_text(
+            '{"type":"summary","summary":"Latest summary from recent session","slug":"test-chain"}\n'
+            '{"type":"user","timestamp":"2025-01-02T00:00:00Z","message":{"role":"user","content":"Hello"}}\n'
+        )
+
+        sessions_by_project = {
+            "test-project": [
+                (session1, "Old summary from first session", "test-chain"),
+                (session2, "Latest summary from recent session", "test-chain"),
+            ]
+        }
+
+        choices = build_session_choices(sessions_by_project, expand_chains=False)
+        value_choices = [c for c in choices if not isinstance(c, questionary.Separator)]
+
+        chain_choice = value_choices[0]
+
+        # Should show the latest (most recent) summary, not the old one
+        assert "Latest summary from recent session" in chain_choice.title
+        assert "Old summary from first" not in chain_choice.title
+
+    def test_expanded_chains_shows_individual_sessions(self, tmp_path):
+        """Test that expanded mode shows individual sessions with chain headers."""
+        from claude_code_transcripts import build_session_choices
+        import questionary
+
+        projects_dir = tmp_path / ".claude" / "projects"
+        project = projects_dir / "test-project"
+        project.mkdir(parents=True)
+
+        # Create chain of 2 sessions
+        session1 = project / "session1.jsonl"
+        session1.write_text(
+            '{"type":"summary","summary":"First","slug":"test-chain"}\n'
+            '{"type":"user","timestamp":"2025-01-01T00:00:00Z","message":{"role":"user","content":"Hello"}}\n'
+        )
+        session2 = project / "session2.jsonl"
+        session2.write_text(
+            '{"type":"summary","summary":"Second","slug":"test-chain"}\n'
+            '{"type":"user","timestamp":"2025-01-02T00:00:00Z","message":{"role":"user","content":"Hello"}}\n'
+        )
+
+        sessions_by_project = {
+            "test-project": [
+                (session1, "First", "test-chain"),
+                (session2, "Second", "test-chain"),
+            ]
+        }
+
+        choices = build_session_choices(sessions_by_project, expand_chains=True)
+
+        # Count separators and value choices
+        separators = [c for c in choices if isinstance(c, questionary.Separator)]
+        value_choices = [c for c in choices if not isinstance(c, questionary.Separator)]
+
+        # Should have project separator + chain separator
+        assert len(separators) >= 2
+
+        # Should have 2 individual session choices (not grouped)
+        assert len(value_choices) == 2
+
+        # Each choice value should be a single Path, not a list
+        for c in value_choices:
+            assert not isinstance(
+                c.value, list
+            ), "Expanded mode should have individual paths"
+
+
+class TestFlattenSelectedSessions:
+    """Tests for flatten_selected_sessions helper."""
+
+    def test_flattens_mixed_selections(self, tmp_path):
+        """Test flattening mixed list and single path selections."""
+        from claude_code_transcripts import flatten_selected_sessions
+
+        path1 = tmp_path / "session1.jsonl"
+        path2 = tmp_path / "session2.jsonl"
+        path3 = tmp_path / "session3.jsonl"
+
+        # Mixed: one chain (list) and one standalone (path)
+        selected = [[path1, path2], path3]
+
+        result = flatten_selected_sessions(selected)
+
+        assert len(result) == 3
+        assert path1 in result
+        assert path2 in result
+        assert path3 in result
+
+    def test_handles_all_single_selections(self, tmp_path):
+        """Test with all single path selections."""
+        from claude_code_transcripts import flatten_selected_sessions
+
+        path1 = tmp_path / "session1.jsonl"
+        path2 = tmp_path / "session2.jsonl"
+
+        selected = [path1, path2]
+
+        result = flatten_selected_sessions(selected)
+
+        assert result == [path1, path2]
+
+    def test_handles_all_chain_selections(self, tmp_path):
+        """Test with all chain (list) selections."""
+        from claude_code_transcripts import flatten_selected_sessions
+
+        path1 = tmp_path / "session1.jsonl"
+        path2 = tmp_path / "session2.jsonl"
+        path3 = tmp_path / "session3.jsonl"
+
+        selected = [[path1, path2], [path3]]
+
+        result = flatten_selected_sessions(selected)
+
+        assert len(result) == 3
+
+    def test_handles_empty_selection(self):
+        """Test with empty selection."""
+        from claude_code_transcripts import flatten_selected_sessions
+
+        result = flatten_selected_sessions([])
+
+        assert result == []

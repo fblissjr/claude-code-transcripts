@@ -312,8 +312,9 @@ def _get_jsonl_summary(filepath, max_length=200):
 def find_local_sessions(folder, limit=10, project_filter=None):
     """Find recent JSONL session files in the given folder.
 
-    Returns a list of (Path, summary) tuples sorted by modification time.
+    Returns a list of (Path, summary, slug) tuples sorted by modification time.
     Excludes agent files and warmup/empty sessions.
+    Sessions with the same slug are part of the same conversation chain (resumed sessions).
 
     Args:
         folder: Path to the projects folder
@@ -334,7 +335,8 @@ def find_local_sessions(folder, limit=10, project_filter=None):
         # Skip boring/empty sessions
         if summary.lower() == "warmup" or summary == "(no summary)":
             continue
-        results.append((f, summary))
+        slug = extract_session_slug(f)
+        results.append((f, summary, slug))
 
     # Sort by modification time, most recent first
     results.sort(key=lambda x: x[0].stat().st_mtime, reverse=True)
@@ -365,6 +367,205 @@ def extract_session_metadata(session_path):
             }
     except (json.JSONDecodeError, OSError):
         return {}
+
+
+def extract_session_slug(session_path):
+    """Extract slug from session file (links related sessions).
+
+    Sessions that are resumed/continued share the same slug field.
+    This allows grouping related sessions into conversation chains.
+
+    Args:
+        session_path: Path to the session file
+
+    Returns:
+        The slug string if found, None otherwise.
+    """
+    session_path = Path(session_path)
+    try:
+        with open(session_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    data = json.loads(line)
+                    if "slug" in data:
+                        return data["slug"]
+                except json.JSONDecodeError:
+                    continue
+    except OSError:
+        pass
+    return None
+
+
+def flatten_selected_sessions(selected):
+    """Flatten selected sessions which may include chains (lists) or single paths.
+
+    In collapsed chain mode, selecting a chain returns a list of all session paths.
+    This function flattens such mixed selections into a single list of paths.
+
+    Args:
+        selected: List of items - each item is either a Path or a list of Paths
+
+    Returns:
+        Flattened list of all session Paths.
+    """
+    result = []
+    for item in selected:
+        if isinstance(item, list):
+            result.extend(item)
+        else:
+            result.append(item)
+    return result
+
+
+def build_session_choices(sessions_by_project, expand_chains=False, agent_counts=None):
+    """Build questionary choices from sessions, with chain grouping support.
+
+    Args:
+        sessions_by_project: Dict mapping project_key to list of (filepath, summary, slug) tuples
+        expand_chains: If False (default), group sessions with same slug into single choice.
+                      If True, show individual sessions with chain headers.
+        agent_counts: Optional dict mapping filepath to agent count for display
+
+    Returns:
+        List of questionary.Choice and questionary.Separator objects.
+    """
+    from datetime import datetime
+
+    agent_counts = agent_counts or {}
+    choices = []
+
+    for project_key, sessions in sessions_by_project.items():
+        # Add project separator with full display name
+        project_name = get_project_display_name(project_key)
+        choices.append(questionary.Separator(f"--- {project_name} ---"))
+
+        # Group sessions by slug
+        slug_groups = {}  # slug -> list of (filepath, summary, slug)
+        standalone = []  # sessions without slug
+
+        for filepath, summary, slug in sessions:
+            if slug:
+                if slug not in slug_groups:
+                    slug_groups[slug] = []
+                slug_groups[slug].append((filepath, summary, slug))
+            else:
+                standalone.append((filepath, summary, slug))
+
+        if expand_chains:
+            # Expanded mode: show individual sessions with chain headers
+            for slug, chain_sessions in slug_groups.items():
+                if len(chain_sessions) > 1:
+                    # Add a separator for the chain
+                    choices.append(
+                        questionary.Separator(
+                            f"  -- {slug} ({len(chain_sessions)} sessions) --"
+                        )
+                    )
+                # Add individual sessions
+                for filepath, summary, _ in chain_sessions:
+                    display = _format_session_display(
+                        filepath, summary, agent_counts.get(filepath, 0)
+                    )
+                    choices.append(questionary.Choice(title=display, value=filepath))
+
+            # Add standalone sessions
+            for filepath, summary, _ in standalone:
+                display = _format_session_display(
+                    filepath, summary, agent_counts.get(filepath, 0)
+                )
+                choices.append(questionary.Choice(title=display, value=filepath))
+
+        else:
+            # Collapsed mode: group chains into single choice
+            for slug, chain_sessions in slug_groups.items():
+                if len(chain_sessions) > 1:
+                    # Create a single choice for the entire chain
+                    paths = [s[0] for s in chain_sessions]
+                    total_size = sum(p.stat().st_size for p in paths) / 1024
+
+                    # Get date range with times
+                    session_stats = [(p, p.stat().st_mtime) for p in paths]
+                    session_stats.sort(key=lambda x: x[1])  # Sort by mtime
+                    oldest_time = datetime.fromtimestamp(session_stats[0][1])
+                    newest_time = datetime.fromtimestamp(session_stats[-1][1])
+
+                    # Find summary from most recent session
+                    newest_path = session_stats[-1][0]
+                    latest_summary = None
+                    for filepath, summary, _ in chain_sessions:
+                        if filepath == newest_path:
+                            latest_summary = summary
+                            break
+
+                    # Format date range
+                    if oldest_time.date() == newest_time.date():
+                        date_range = f"{oldest_time.strftime('%b %d %H:%M')} - {newest_time.strftime('%H:%M')}"
+                    else:
+                        date_range = f"{oldest_time.strftime('%b %d %H:%M')} - {newest_time.strftime('%b %d %H:%M')}"
+
+                    # Truncate summary for display
+                    max_summary = 50
+                    if latest_summary and len(latest_summary) > max_summary:
+                        latest_summary = latest_summary[: max_summary - 3] + "..."
+
+                    # Multi-line display for better readability
+                    line1 = f"[{len(chain_sessions)} sessions] {slug}"
+                    line2 = f"    {total_size:,.0f} KB | {date_range}"
+                    if latest_summary:
+                        line2 += f' | "{latest_summary}"'
+
+                    display = f"{line1}\n{line2}"
+                    choices.append(questionary.Choice(title=display, value=paths))
+                else:
+                    # Single session with slug - treat as standalone
+                    filepath, summary, _ = chain_sessions[0]
+                    display = _format_session_display(
+                        filepath, summary, agent_counts.get(filepath, 0)
+                    )
+                    choices.append(questionary.Choice(title=display, value=filepath))
+
+            # Add standalone sessions
+            for filepath, summary, _ in standalone:
+                display = _format_session_display(
+                    filepath, summary, agent_counts.get(filepath, 0)
+                )
+                choices.append(questionary.Choice(title=display, value=filepath))
+
+    return choices
+
+
+def _format_session_display(filepath, summary, agent_count=0):
+    """Format a single session for display in the selection list.
+
+    Args:
+        filepath: Path to the session file
+        summary: Session summary text
+        agent_count: Number of related agent sessions
+
+    Returns:
+        Formatted display string.
+    """
+    from datetime import datetime
+
+    stat = filepath.stat()
+    mod_time = datetime.fromtimestamp(stat.st_mtime)
+    size_kb = stat.st_size / 1024
+    date_str = mod_time.strftime("%Y-%m-%d %H:%M")
+
+    # Truncate summary
+    max_summary = 45
+    if len(summary) > max_summary:
+        summary = summary[: max_summary - 3] + "..."
+
+    # Build suffix for agents
+    suffix = ""
+    if agent_count > 0:
+        suffix = f" (+{agent_count} agents)"
+
+    return f"{date_str}  {size_kb:5.0f} KB  {summary}{suffix}"
 
 
 def find_agent_sessions(session_paths, recursive=True):
@@ -523,6 +724,10 @@ def get_project_display_name(folder_name):
 def matches_project_filter(folder_name: str, project_filter: str | None) -> bool:
     """Check if project folder matches filter (partial, case-insensitive).
 
+    Matches against both the display name AND the raw folder name for
+    better discoverability (e.g., searching "claude-code" will match
+    even if display name is "workspace-claude-transcripts").
+
     Args:
         folder_name: The raw folder name (e.g., "-home-user-projects-myproject")
         project_filter: Filter string to match against, or None for no filtering
@@ -532,8 +737,10 @@ def matches_project_filter(folder_name: str, project_filter: str | None) -> bool
     """
     if not project_filter:
         return True
+    filter_lower = project_filter.lower()
     display_name = get_project_display_name(folder_name)
-    return project_filter.lower() in display_name.lower()
+    # Match against display name OR raw folder name
+    return filter_lower in display_name.lower() or filter_lower in folder_name.lower()
 
 
 def find_all_sessions(folder, include_agents=False, project_filter=None):
@@ -1670,6 +1877,45 @@ def fetch_session(token, org_uuid, session_id):
     return response.json()
 
 
+def detect_github_repo_from_cwd():
+    """
+    Detect GitHub repo from current working directory's git remote.
+
+    Runs `git remote get-url origin` and parses the GitHub URL.
+    Supports both HTTPS and SSH URL formats.
+
+    Returns the repo (owner/name) or None.
+    """
+    import subprocess
+
+    try:
+        result = subprocess.run(
+            ["git", "remote", "get-url", "origin"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode != 0:
+            return None
+
+        url = result.stdout.strip()
+
+        # Match HTTPS: https://github.com/owner/repo.git or https://github.com/owner/repo
+        https_match = re.search(r"github\.com/([^/]+/[^/]+?)(?:\.git)?$", url)
+        if https_match:
+            return https_match.group(1)
+
+        # Match SSH: git@github.com:owner/repo.git or git@github.com:owner/repo
+        ssh_match = re.search(r"github\.com:([^/]+/[^/]+?)(?:\.git)?$", url)
+        if ssh_match:
+            return ssh_match.group(1)
+
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        pass
+
+    return None
+
+
 def detect_github_repo(loglines):
     """
     Detect GitHub repo from git push output in tool results.
@@ -2500,13 +2746,19 @@ def generate_html(json_path, output_dir, github_repo=None):
 
     # Auto-detect GitHub repo if not provided
     if github_repo is None:
+        # First try to detect from session content (git push output)
         github_repo = detect_github_repo(loglines)
         if github_repo:
-            print(f"Auto-detected GitHub repo: {github_repo}")
+            print(f"Auto-detected GitHub repo from session: {github_repo}")
         else:
-            print(
-                "Warning: Could not auto-detect GitHub repo. Commit links will be disabled."
-            )
+            # Fallback: detect from current working directory's git remote
+            github_repo = detect_github_repo_from_cwd()
+            if github_repo:
+                print(f"Auto-detected GitHub repo from cwd: {github_repo}")
+            else:
+                print(
+                    "Warning: Could not auto-detect GitHub repo. Commit links will be disabled."
+                )
 
     # Set module-level variable for render functions
     global _github_repo
@@ -2711,8 +2963,8 @@ def cli():
 )
 @click.option(
     "--limit",
-    default=10,
-    help="Maximum number of sessions to show (default: 10)",
+    default=100,
+    help="Maximum number of sessions to show (default: 100).",
 )
 @click.option(
     "-p",
@@ -2744,6 +2996,11 @@ def cli():
     is_flag=True,
     help="Include thinking blocks in DuckDB/JSON export (can be large).",
 )
+@click.option(
+    "--expand-chains",
+    is_flag=True,
+    help="Show individual sessions in chains instead of collapsed view.",
+)
 def local_cmd(
     output,
     output_auto,
@@ -2757,6 +3014,7 @@ def local_cmd(
     schema_type,
     include_subagents,
     include_thinking,
+    expand_chains,
 ):
     """Select and convert local Claude Code sessions to HTML or DuckDB.
 
@@ -2781,27 +3039,27 @@ def local_cmd(
     # Count related agents for each session
     agent_counts = {}
     if include_subagents:
-        session_paths = [filepath for filepath, _ in results]
+        session_paths = [filepath for filepath, _, _ in results]
         agent_map = find_agent_sessions(session_paths, recursive=True)
         for filepath, agents in agent_map.items():
             agent_counts[filepath] = len(agents)
 
-    # Build choices for questionary
-    choices = []
-    for filepath, summary in results:
-        stat = filepath.stat()
-        mod_time = datetime.fromtimestamp(stat.st_mtime)
-        size_kb = stat.st_size / 1024
-        date_str = mod_time.strftime("%Y-%m-%d %H:%M")
-        # Truncate summary if too long
-        if len(summary) > 50:
-            summary = summary[:47] + "..."
-        # Show agent count if include_subagents
-        agent_suffix = ""
-        if include_subagents and agent_counts.get(filepath, 0) > 0:
-            agent_suffix = f" (+{agent_counts[filepath]} agents)"
-        display = f"{date_str}  {size_kb:5.0f} KB  {summary}{agent_suffix}"
-        choices.append(questionary.Choice(title=display, value=filepath))
+    # Group sessions by project for better organization
+    sessions_by_project = {}
+    for filepath, summary, slug in results:
+        project_key = filepath.parent.name
+        if project_key not in sessions_by_project:
+            sessions_by_project[project_key] = []
+        sessions_by_project[project_key].append((filepath, summary, slug))
+
+    # Build choices for questionary with project separators
+    # Default: chains are collapsed (selecting a chain selects all sessions)
+    # With --expand-chains: individual sessions shown with chain headers
+    choices = build_session_choices(
+        sessions_by_project,
+        expand_chains=expand_chains,
+        agent_counts=agent_counts if include_subagents else None,
+    )
 
     # Multi-select with checkbox
     selected = questionary.checkbox(
@@ -2813,6 +3071,8 @@ def local_cmd(
         click.echo("No sessions selected.")
         return
 
+    # Flatten selection: chains return lists of paths, standalone return single paths
+    selected = flatten_selected_sessions(selected)
     click.echo(f"Selected {len(selected)} session(s)")
 
     # Auto-include subagents if requested
@@ -3154,9 +3414,15 @@ def generate_html_from_session_data(session_data, output_dir, github_repo=None):
 
     # Auto-detect GitHub repo if not provided
     if github_repo is None:
+        # First try to detect from session content (git push output)
         github_repo = detect_github_repo(loglines)
         if github_repo:
-            click.echo(f"Auto-detected GitHub repo: {github_repo}")
+            click.echo(f"Auto-detected GitHub repo from session: {github_repo}")
+        else:
+            # Fallback: detect from current working directory's git remote
+            github_repo = detect_github_repo_from_cwd()
+            if github_repo:
+                click.echo(f"Auto-detected GitHub repo from cwd: {github_repo}")
 
     # Set module-level variable for render functions
     global _github_repo

@@ -124,14 +124,17 @@ class TestMatchesProjectFilter:
         assert matches_project_filter("-home-user-projects-myproject", "other") is False
         assert matches_project_filter("-home-user-projects-myproject", "xyz") is False
 
-    def test_matches_display_name_not_raw_folder(self):
-        """Test that filter matches against display name, not raw folder name."""
+    def test_matches_both_display_and_raw_folder(self):
+        """Test that filter matches against both display name and raw folder name."""
         # The display name for this would be "myproject", not the full path
         assert (
             matches_project_filter("-home-user-projects-myproject", "myproject") is True
         )
-        # Searching for "home" should not match since it's not in display name
-        assert matches_project_filter("-home-user-projects-myproject", "home") is False
+        # Searching for "home" now matches because we search raw folder too
+        # This makes filtering more intuitive for users who know the folder structure
+        assert matches_project_filter("-home-user-projects-myproject", "home") is True
+        # Still doesn't match things not in either name
+        assert matches_project_filter("-home-user-projects-myproject", "xyz") is False
 
 
 class TestFindAllSessions:
