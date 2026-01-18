@@ -9,7 +9,7 @@ import hashlib
 import duckdb
 import pytest
 
-from claude_code_transcripts import (
+from ccutils import (
     create_star_schema,
     run_star_schema_etl,
     generate_dimension_key,
@@ -2029,7 +2029,7 @@ class TestLLMEnrichmentTables:
 # =============================================================================
 
 
-from claude_code_transcripts import run_llm_enrichment, run_session_insights_enrichment
+from ccutils import run_llm_enrichment, run_session_insights_enrichment
 
 
 class TestLLMEnrichmentPipeline:

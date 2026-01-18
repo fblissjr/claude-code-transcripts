@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
-from claude_code_transcripts import (
+from ccutils import (
     cli,
     extract_searchable_content,
     extract_snippet,

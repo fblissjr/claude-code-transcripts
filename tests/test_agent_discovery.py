@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from claude_code_transcripts import (
+from ccutils import (
     extract_session_metadata,
     find_agent_sessions,
     generate_multi_session_index,

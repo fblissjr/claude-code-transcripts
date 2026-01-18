@@ -1,14 +1,14 @@
 [project]
-name = "claude-code-transcripts"
-version = "0.5"
-description = "Convert Claude Code session files to HTML transcripts"
+name = "ccutils"
+version = "0.6"
+description = "Claude utilities for session transcripts, star schema analytics, data exploration, and probably more as it comes up as a use case in my day to day"
 readme = "README.md"
 license = "Apache-2.0"
 authors = [
-    { name = "Simon Willison" }
+    { name = "fblissjr" }
 ]
 maintainers = [
-    { name = "fblissjr" }  # Star schema analytics fork
+    { name = "fblissjr" }
 ]
 requires-python = ">=3.10"
 dependencies = [
@@ -22,13 +22,10 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/simonw/claude-code-transcripts"
-Changelog = "https://github.com/simonw/claude-code-transcripts/releases"
-Issues = "https://github.com/simonw/claude-code-transcripts/issues"
-CI = "https://github.com/simonw/claude-code-transcripts/actions"
+Homepage = "https://github.com/fblissjr/ccutils"
 
 [project.scripts]
-claude-code-transcripts = "claude_code_transcripts:main"
+ccutils = "ccutils:main"
 
 [build-system]
 requires = ["uv_build>=0.9.7,<0.10.0"]

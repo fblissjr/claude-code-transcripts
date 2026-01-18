@@ -4,7 +4,7 @@ Uses uv. Run tests like this:
 
 Run the development version of the tool like this:
 
-    uv run claude-code-transcripts --help
+    uv run ccutils --help
 
 Always practice TDD: write a failing test, watch it fail, then make it pass.
 
@@ -17,12 +17,23 @@ Run Black to format code before you commit:
 ## Project Structure
 
 ```
-claude-code-transcripts/
-├── src/claude_code_transcripts/
-│   ├── __init__.py           # CLI, orchestration, re-exports modular APIs
+ccutils/
+├── src/ccutils/
+│   ├── __init__.py           # Public API re-exports
+│   ├── cli/                   # CLI commands
+│   │   ├── __init__.py       # CLI group and entry point
+│   │   ├── local.py          # local command
+│   │   ├── web.py            # web command
+│   │   ├── json_cmd.py       # json command
+│   │   ├── all.py            # all command
+│   │   ├── explore.py        # explore command
+│   │   └── utils.py          # CLI utilities
+│   ├── api/                   # API client and credentials
+│   │   └── __init__.py
 │   ├── parsers/              # Session file parsing utilities
 │   │   ├── __init__.py       # Public API exports
-│   │   └── session.py        # JSONL/JSON session parsing
+│   │   ├── session.py        # JSONL/JSON session parsing
+│   │   └── discovery.py      # Session discovery
 │   ├── schemas/              # Schema definitions
 │   │   ├── __init__.py       # Unified exports for both schemas
 │   │   ├── simple/           # Simple 4-table schema
@@ -38,6 +49,10 @@ claude-code-transcripts/
 │   │       ├── enrichment.py # LLM enrichment functions
 │   │       ├── json_export.py# JSON export for star schema
 │   │       └── utils.py      # Key generation, tool/model classification
+│   ├── export/                # Export format handlers
+│   │   ├── __init__.py
+│   │   ├── html.py           # HTML generation
+│   │   └── duckdb_archive.py # DuckDB batch export
 │   ├── explorer/             # Data Explorer SPA
 │   │   ├── index.html
 │   │   ├── css/styles.css
@@ -47,9 +62,10 @@ claude-code-transcripts/
 │       ├── page.html
 │       └── star_schema_dashboard.html
 ├── tests/
-│   ├── test_claude_code_transcripts.py  # Core functionality tests
-│   ├── test_star_schema.py              # Star schema & ETL tests
-│   └── test_json_export.py              # JSON export tests
+│   ├── test_generate_html.py         # HTML generation tests
+│   ├── test_star_schema.py           # Star schema & ETL tests
+│   ├── test_json_export.py           # JSON export tests
+│   └── test_all.py                   # Batch conversion tests
 ├── docs/
 │   ├── STAR_SCHEMA.md        # Star schema documentation
 │   └── DATA_EXPLORER.md      # Data explorer documentation
@@ -110,7 +126,7 @@ Three output formats with two schema types:
 
 For optional LLM-based classification:
 ```python
-from claude_code_transcripts import run_llm_enrichment, run_session_insights_enrichment
+from ccutils import run_llm_enrichment, run_session_insights_enrichment
 
 # Enrich messages with intent, sentiment, topics
 run_llm_enrichment(conn, my_enrich_func)
@@ -131,7 +147,7 @@ Run star schema tests specifically:
 
 Run with coverage:
 
-    uv run pytest --cov=claude_code_transcripts
+    uv run pytest --cov=ccutils
 
 ## Common Workflows
 

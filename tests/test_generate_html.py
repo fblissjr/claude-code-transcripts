@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from syrupy.extensions.single_file import SingleFileSnapshotExtension, WriteMode
 
-from claude_code_transcripts import (
+from ccutils import (
     generate_html,
     detect_github_repo,
     render_markdown_text,
@@ -289,7 +289,7 @@ class TestRenderContentBlock:
     def test_tool_result_with_commit(self, snapshot_html):
         """Test tool result with git commit output."""
         # Need to set the global github_repo for commit link rendering
-        from claude_code_transcripts import get_github_repo, set_github_repo
+        from ccutils import get_github_repo, set_github_repo
 
         old_repo = get_github_repo()
         set_github_repo("example/repo")
@@ -667,8 +667,9 @@ class TestSessionGistOption:
     def test_session_gist_creates_gist(self, monkeypatch, tmp_path):
         """Test that session --gist creates a gist."""
         from click.testing import CliRunner
-        from claude_code_transcripts import cli
+        from ccutils import cli
         import subprocess
+        import tempfile
 
         # Create sample session file
         fixture_path = Path(__file__).parent / "sample_session.json"
@@ -687,9 +688,7 @@ class TestSessionGistOption:
         monkeypatch.setattr(subprocess, "run", mock_run)
 
         # Mock tempfile.gettempdir to use our tmp_path
-        monkeypatch.setattr(
-            "claude_code_transcripts.tempfile.gettempdir", lambda: str(tmp_path)
-        )
+        monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))
 
         runner = CliRunner()
         result = runner.invoke(
@@ -705,7 +704,7 @@ class TestSessionGistOption:
     def test_session_gist_with_output_dir(self, monkeypatch, output_dir):
         """Test that session --gist with -o uses specified directory."""
         from click.testing import CliRunner
-        from claude_code_transcripts import cli
+        from ccutils import cli
         import subprocess
 
         fixture_path = Path(__file__).parent / "sample_session.json"
@@ -843,7 +842,7 @@ class TestSessionJsonOption:
     def test_session_json_copies_file(self, output_dir):
         """Test that session --json copies the JSON file to output."""
         from click.testing import CliRunner
-        from claude_code_transcripts import cli
+        from ccutils import cli
 
         fixture_path = Path(__file__).parent / "sample_session.json"
 
@@ -862,7 +861,7 @@ class TestSessionJsonOption:
     def test_session_json_preserves_original_name(self, output_dir):
         """Test that --json preserves the original filename."""
         from click.testing import CliRunner
-        from claude_code_transcripts import cli
+        from ccutils import cli
 
         fixture_path = Path(__file__).parent / "sample_session.json"
 
@@ -884,7 +883,7 @@ class TestImportJsonOption:
     def test_import_json_saves_session_data(self, httpx_mock, output_dir):
         """Test that import --json saves the session JSON."""
         from click.testing import CliRunner
-        from claude_code_transcripts import cli
+        from ccutils import cli
 
         # Load sample session to mock API response
         fixture_path = Path(__file__).parent / "sample_session.json"
@@ -930,8 +929,9 @@ class TestImportGistOption:
     def test_import_gist_creates_gist(self, httpx_mock, monkeypatch, tmp_path):
         """Test that import --gist creates a gist."""
         from click.testing import CliRunner
-        from claude_code_transcripts import cli
+        from ccutils import cli
         import subprocess
+        import tempfile
 
         # Load sample session to mock API response
         fixture_path = Path(__file__).parent / "sample_session.json"
@@ -957,9 +957,7 @@ class TestImportGistOption:
         monkeypatch.setattr(subprocess, "run", mock_run)
 
         # Mock tempfile.gettempdir
-        monkeypatch.setattr(
-            "claude_code_transcripts.tempfile.gettempdir", lambda: str(tmp_path)
-        )
+        monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))
 
         runner = CliRunner()
         result = runner.invoke(
@@ -988,12 +986,12 @@ class TestVersionOption:
         """Test that --version shows version info."""
         import importlib.metadata
         from click.testing import CliRunner
-        from claude_code_transcripts import cli
+        from ccutils import cli
 
         runner = CliRunner()
         result = runner.invoke(cli, ["--version"])
 
-        expected_version = importlib.metadata.version("claude-code-transcripts")
+        expected_version = importlib.metadata.version("ccutils")
         assert result.exit_code == 0
         assert expected_version in result.output
 
@@ -1001,12 +999,12 @@ class TestVersionOption:
         """Test that -v shows version info."""
         import importlib.metadata
         from click.testing import CliRunner
-        from claude_code_transcripts import cli
+        from ccutils import cli
 
         runner = CliRunner()
         result = runner.invoke(cli, ["-v"])
 
-        expected_version = importlib.metadata.version("claude-code-transcripts")
+        expected_version = importlib.metadata.version("ccutils")
         assert result.exit_code == 0
         assert expected_version in result.output
 
@@ -1017,7 +1015,8 @@ class TestOpenOption:
     def test_session_open_calls_webbrowser(self, output_dir, monkeypatch):
         """Test that session --open opens the browser."""
         from click.testing import CliRunner
-        from claude_code_transcripts import cli
+        from ccutils import cli
+        import webbrowser
 
         fixture_path = Path(__file__).parent / "sample_session.json"
 
@@ -1028,7 +1027,7 @@ class TestOpenOption:
             opened_urls.append(url)
             return True
 
-        monkeypatch.setattr("claude_code_transcripts.webbrowser.open", mock_open)
+        monkeypatch.setattr(webbrowser, "open", mock_open)
 
         runner = CliRunner()
         result = runner.invoke(
@@ -1044,7 +1043,8 @@ class TestOpenOption:
     def test_import_open_calls_webbrowser(self, httpx_mock, output_dir, monkeypatch):
         """Test that import --open opens the browser."""
         from click.testing import CliRunner
-        from claude_code_transcripts import cli
+        from ccutils import cli
+        import webbrowser
 
         # Load sample session to mock API response
         fixture_path = Path(__file__).parent / "sample_session.json"
@@ -1063,7 +1063,7 @@ class TestOpenOption:
             opened_urls.append(url)
             return True
 
-        monkeypatch.setattr("claude_code_transcripts.webbrowser.open", mock_open)
+        monkeypatch.setattr(webbrowser, "open", mock_open)
 
         runner = CliRunner()
         result = runner.invoke(
@@ -1369,7 +1369,7 @@ class TestLocalSessionCLI:
     def test_local_shows_sessions_and_converts(self, tmp_path, monkeypatch):
         """Test that 'local' command shows sessions and converts selected one."""
         from click.testing import CliRunner
-        from claude_code_transcripts import cli
+        from ccutils import cli
         import questionary
 
         # Create mock .claude/projects structure
@@ -1405,7 +1405,7 @@ class TestLocalSessionCLI:
     def test_no_args_runs_local_command(self, tmp_path, monkeypatch):
         """Test that running with no arguments runs local command."""
         from click.testing import CliRunner
-        from claude_code_transcripts import cli
+        from ccutils import cli
         import questionary
 
         # Create mock .claude/projects structure
@@ -1440,7 +1440,7 @@ class TestLocalSessionCLI:
     def test_local_handles_cancelled_selection(self, tmp_path, monkeypatch):
         """Test that local command handles cancelled selection gracefully."""
         from click.testing import CliRunner
-        from claude_code_transcripts import cli
+        from ccutils import cli
         import questionary
 
         # Create mock .claude/projects structure
@@ -1479,7 +1479,7 @@ class TestOutputAutoOption:
     def test_json_output_auto_creates_subdirectory(self, tmp_path):
         """Test that json -a creates output subdirectory named after file stem."""
         from click.testing import CliRunner
-        from claude_code_transcripts import cli
+        from ccutils import cli
 
         fixture_path = Path(__file__).parent / "sample_session.json"
 
@@ -1498,7 +1498,7 @@ class TestOutputAutoOption:
     def test_json_output_auto_uses_cwd_when_no_output(self, tmp_path, monkeypatch):
         """Test that json -a uses current directory when -o not specified."""
         from click.testing import CliRunner
-        from claude_code_transcripts import cli
+        from ccutils import cli
         import os
 
         fixture_path = Path(__file__).parent / "sample_session.json"
@@ -1521,7 +1521,8 @@ class TestOutputAutoOption:
     def test_json_output_auto_no_browser_open(self, tmp_path, monkeypatch):
         """Test that json -a does not auto-open browser."""
         from click.testing import CliRunner
-        from claude_code_transcripts import cli
+        from ccutils import cli
+        import webbrowser
 
         fixture_path = Path(__file__).parent / "sample_session.json"
 
@@ -1532,7 +1533,7 @@ class TestOutputAutoOption:
             opened_urls.append(url)
             return True
 
-        monkeypatch.setattr("claude_code_transcripts.webbrowser.open", mock_open)
+        monkeypatch.setattr(webbrowser, "open", mock_open)
 
         runner = CliRunner()
         result = runner.invoke(
@@ -1546,7 +1547,7 @@ class TestOutputAutoOption:
     def test_local_output_auto_creates_subdirectory(self, tmp_path, monkeypatch):
         """Test that local -a creates output subdirectory named after file stem."""
         from click.testing import CliRunner
-        from claude_code_transcripts import cli
+        from ccutils import cli
         import questionary
 
         # Create mock .claude/projects structure
@@ -1587,7 +1588,7 @@ class TestOutputAutoOption:
     def test_web_output_auto_creates_subdirectory(self, httpx_mock, tmp_path):
         """Test that web -a creates output subdirectory named after session ID."""
         from click.testing import CliRunner
-        from claude_code_transcripts import cli
+        from ccutils import cli
 
         # Load sample session to mock API response
         fixture_path = Path(__file__).parent / "sample_session.json"
@@ -1624,7 +1625,7 @@ class TestOutputAutoOption:
     def test_output_auto_with_jsonl_uses_stem(self, tmp_path, monkeypatch):
         """Test that -a with JSONL file uses file stem (without .jsonl extension)."""
         from click.testing import CliRunner
-        from claude_code_transcripts import cli
+        from ccutils import cli
 
         # Create a JSONL file
         fixture_path = Path(__file__).parent / "sample_session.jsonl"
@@ -1881,7 +1882,7 @@ class TestBuildSessionChoices:
 
     def test_collapsed_chains_groups_sessions_by_slug(self, tmp_path):
         """Test that collapsed mode groups sessions with same slug into single choice."""
-        from claude_code_transcripts import build_session_choices
+        from ccutils import build_session_choices
 
         projects_dir = tmp_path / ".claude" / "projects"
         project = projects_dir / "test-project"
@@ -1933,7 +1934,7 @@ class TestBuildSessionChoices:
 
     def test_collapsed_chain_shows_metadata(self, tmp_path):
         """Test that collapsed chain shows session count and date range."""
-        from claude_code_transcripts import build_session_choices
+        from ccutils import build_session_choices
         import questionary
 
         projects_dir = tmp_path / ".claude" / "projects"
@@ -1975,7 +1976,7 @@ class TestBuildSessionChoices:
 
     def test_collapsed_chain_shows_latest_summary(self, tmp_path):
         """Test that collapsed chain shows the summary from the most recent session."""
-        from claude_code_transcripts import build_session_choices
+        from ccutils import build_session_choices
         import questionary
         import time
 
@@ -2016,7 +2017,7 @@ class TestBuildSessionChoices:
 
     def test_expanded_chains_shows_individual_sessions(self, tmp_path):
         """Test that expanded mode shows individual sessions with chain headers."""
-        from claude_code_transcripts import build_session_choices
+        from ccutils import build_session_choices
         import questionary
 
         projects_dir = tmp_path / ".claude" / "projects"
@@ -2066,7 +2067,7 @@ class TestFlattenSelectedSessions:
 
     def test_flattens_mixed_selections(self, tmp_path):
         """Test flattening mixed list and single path selections."""
-        from claude_code_transcripts import flatten_selected_sessions
+        from ccutils import flatten_selected_sessions
 
         path1 = tmp_path / "session1.jsonl"
         path2 = tmp_path / "session2.jsonl"
@@ -2084,7 +2085,7 @@ class TestFlattenSelectedSessions:
 
     def test_handles_all_single_selections(self, tmp_path):
         """Test with all single path selections."""
-        from claude_code_transcripts import flatten_selected_sessions
+        from ccutils import flatten_selected_sessions
 
         path1 = tmp_path / "session1.jsonl"
         path2 = tmp_path / "session2.jsonl"
@@ -2097,7 +2098,7 @@ class TestFlattenSelectedSessions:
 
     def test_handles_all_chain_selections(self, tmp_path):
         """Test with all chain (list) selections."""
-        from claude_code_transcripts import flatten_selected_sessions
+        from ccutils import flatten_selected_sessions
 
         path1 = tmp_path / "session1.jsonl"
         path2 = tmp_path / "session2.jsonl"
@@ -2111,7 +2112,7 @@ class TestFlattenSelectedSessions:
 
     def test_handles_empty_selection(self):
         """Test with empty selection."""
-        from claude_code_transcripts import flatten_selected_sessions
+        from ccutils import flatten_selected_sessions
 
         result = flatten_selected_sessions([])
 

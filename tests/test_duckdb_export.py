@@ -8,7 +8,7 @@ import duckdb
 import pytest
 from click.testing import CliRunner
 
-from claude_code_transcripts import (
+from ccutils import (
     cli,
     create_duckdb_schema,
     export_session_to_duckdb,

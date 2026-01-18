@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from claude_code_transcripts import (
+from ccutils import (
     resolve_schema_format,
     export_sessions_to_json,
     create_star_schema,

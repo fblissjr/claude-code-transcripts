@@ -1,6 +1,7 @@
 """Pytest configuration and fixtures for claude-code-transcripts tests."""
 
 import pytest
+import webbrowser
 
 
 @pytest.fixture(autouse=True)
@@ -12,5 +13,6 @@ def mock_webbrowser_open(monkeypatch):
         opened_urls.append(url)
         return True
 
-    monkeypatch.setattr("claude_code_transcripts.webbrowser.open", mock_open)
+    # Patch the stdlib webbrowser.open directly
+    monkeypatch.setattr(webbrowser, "open", mock_open)
     return opened_urls

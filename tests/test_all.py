@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
-from claude_code_transcripts import (
+from ccutils import (
     cli,
     find_all_sessions,
     get_project_display_name,
@@ -362,7 +362,7 @@ class TestGenerateBatchHtml:
 
             # Patch generate_html to fail on one specific session
             # Patch in export.html module where generate_batch_html calls it
-            from claude_code_transcripts.export import html as export_html
+            from ccutils.export import html as export_html
 
             original_generate_html = export_html.generate_html
 
@@ -520,7 +520,7 @@ class TestJsonCommandWithUrl:
 
         runner = CliRunner()
         with patch(
-            "claude_code_transcripts.httpx.get", return_value=mock_response
+            "ccutils.cli.utils.httpx.get", return_value=mock_response
         ) as mock_get:
             result = runner.invoke(
                 cli,
@@ -553,7 +553,7 @@ class TestJsonCommandWithUrl:
 
         runner = CliRunner()
         with patch(
-            "claude_code_transcripts.httpx.get", return_value=mock_response
+            "ccutils.cli.utils.httpx.get", return_value=mock_response
         ) as mock_get:
             result = runner.invoke(
                 cli,
@@ -575,7 +575,7 @@ class TestJsonCommandWithUrl:
 
         runner = CliRunner()
         with patch(
-            "claude_code_transcripts.httpx.get",
+            "ccutils.cli.utils.httpx.get",
             side_effect=httpx.RequestError("Network error"),
         ):
             result = runner.invoke(

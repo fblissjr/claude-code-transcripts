@@ -25,7 +25,7 @@ from ..parsers import (
 
 # Set up Jinja2 environment
 _jinja_env = Environment(
-    loader=PackageLoader("claude_code_transcripts", "templates"),
+    loader=PackageLoader("ccutils", "templates"),
     autoescape=True,
 )
 
