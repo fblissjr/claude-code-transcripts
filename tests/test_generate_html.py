@@ -23,6 +23,7 @@ from claude_code_transcripts import (
     is_tool_result_message,
     inject_gist_preview_js,
     create_gist,
+    GistError,
     GIST_PREVIEW_JS,
     parse_session_file,
     get_session_summary,
@@ -287,11 +288,11 @@ class TestRenderContentBlock:
 
     def test_tool_result_with_commit(self, snapshot_html):
         """Test tool result with git commit output."""
-        # Need to set the global _github_repo for commit link rendering
-        import claude_code_transcripts
+        # Need to set the global github_repo for commit link rendering
+        from claude_code_transcripts import get_github_repo, set_github_repo
 
-        old_repo = claude_code_transcripts._github_repo
-        claude_code_transcripts._github_repo = "example/repo"
+        old_repo = get_github_repo()
+        set_github_repo("example/repo")
         try:
             block = {
                 "type": "tool_result",
@@ -301,7 +302,7 @@ class TestRenderContentBlock:
             result = render_content_block(block)
             assert result == snapshot_html
         finally:
-            claude_code_transcripts._github_repo = old_repo
+            set_github_repo(old_repo)
 
     def test_tool_result_with_image(self, snapshot_html):
         """Test tool result containing image blocks in content array.
@@ -605,9 +606,7 @@ class TestCreateGist:
 
     def test_raises_on_no_html_files(self, output_dir):
         """Test that error is raised when no HTML files exist."""
-        import click
-
-        with pytest.raises(click.ClickException) as exc_info:
+        with pytest.raises(GistError) as exc_info:
             create_gist(output_dir)
 
         assert "No HTML files found" in str(exc_info.value)
@@ -615,7 +614,6 @@ class TestCreateGist:
     def test_raises_on_gh_cli_error(self, output_dir, monkeypatch):
         """Test that error is raised when gh CLI fails."""
         import subprocess
-        import click
 
         # Create test HTML file
         (output_dir / "index.html").write_text(
@@ -624,23 +622,27 @@ class TestCreateGist:
 
         # Mock subprocess.run to simulate gh error
         def mock_run(*args, **kwargs):
-            raise subprocess.CalledProcessError(
-                returncode=1,
-                cmd=["gh", "gist", "create"],
-                stderr="error: Not logged in",
-            )
+            result = type(
+                "MockResult",
+                (),
+                {
+                    "returncode": 1,
+                    "stderr": "error: Not logged in",
+                    "stdout": "",
+                },
+            )()
+            return result
 
         monkeypatch.setattr(subprocess, "run", mock_run)
 
-        with pytest.raises(click.ClickException) as exc_info:
+        with pytest.raises(GistError) as exc_info:
             create_gist(output_dir)
 
-        assert "Failed to create gist" in str(exc_info.value)
+        assert "gh gist create failed" in str(exc_info.value)
 
     def test_raises_on_gh_not_found(self, output_dir, monkeypatch):
         """Test that error is raised when gh CLI is not installed."""
         import subprocess
-        import click
 
         # Create test HTML file
         (output_dir / "index.html").write_text(
@@ -653,7 +655,7 @@ class TestCreateGist:
 
         monkeypatch.setattr(subprocess, "run", mock_run)
 
-        with pytest.raises(click.ClickException) as exc_info:
+        with pytest.raises(GistError) as exc_info:
             create_gist(output_dir)
 
         assert "gh CLI not found" in str(exc_info.value)

@@ -12,8 +12,8 @@ from claude_code_transcripts import (
     create_star_schema,
     run_star_schema_etl,
     create_semantic_model,
+    export_star_schema_to_json,
 )
-from claude_code_transcripts.star_schema import export_star_schema_to_json
 
 
 class TestResolveSchemaFormat:

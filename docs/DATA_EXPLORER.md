@@ -39,7 +39,7 @@ Then launch: `claude-code-transcripts explore analytics.duckdb`
 ## Architecture
 
 ```
-templates/data_explorer/
+explorer/
 ├── index.html          # Main HTML shell
 ├── css/
 │   └── styles.css      # Custom styles (Tailwind via CDN)

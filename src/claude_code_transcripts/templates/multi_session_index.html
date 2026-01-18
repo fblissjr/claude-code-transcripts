@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ title }}</title>
+    <style>{{ css }}</style>
+</head>
+<body>
+    <div class="container">
+        <h1>{{ title }}</h1>
+        <ul class="index-list">
+            {% for session in sessions %}
+            <li class="index-item{% if session.is_agent %} agent{% endif %}">
+                <div class="index-item-header">
+                    <a href="{{ session.name }}/index.html">{{ session.name }}</a>
+                    {% if session.agent_count > 0 %}
+                    <span class="agent-badge">{{ session.agent_count }} agents</span>
+                    {% endif %}
+                </div>
+                <div class="index-item-meta">
+                    <span class="date">{{ session.date }}</span>
+                    <span class="size">{{ "%.0f"|format(session.size_kb) }} KB</span>
+                </div>
+                <div class="index-item-preview">{{ session.summary }}</div>
+            </li>
+            {% endfor %}
+        </ul>
+    </div>
+    <script>{{ js }}</script>
+</body>
+</html>

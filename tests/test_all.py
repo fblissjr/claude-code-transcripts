@@ -361,15 +361,18 @@ class TestGenerateBatchHtml:
             )
 
             # Patch generate_html to fail on one specific session
-            original_generate_html = __import__("claude_code_transcripts").generate_html
+            # Patch in export.html module where generate_batch_html calls it
+            from claude_code_transcripts.export import html as export_html
+
+            original_generate_html = export_html.generate_html
 
             def mock_generate_html(json_path, output_dir, github_repo=None):
                 if "session1" in str(json_path):
                     raise RuntimeError("Simulated failure")
                 return original_generate_html(json_path, output_dir, github_repo)
 
-            with patch(
-                "claude_code_transcripts.generate_html", side_effect=mock_generate_html
+            with patch.object(
+                export_html, "generate_html", side_effect=mock_generate_html
             ):
                 stats = generate_batch_html(projects_dir, output_dir)
 

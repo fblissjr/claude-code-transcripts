@@ -19,28 +19,37 @@ Run Black to format code before you commit:
 ```
 claude-code-transcripts/
 ├── src/claude_code_transcripts/
-│   ├── __init__.py           # CLI, parsers, re-exports star_schema API
-│   ├── star_schema/          # Modular star schema package
+│   ├── __init__.py           # CLI, orchestration, re-exports modular APIs
+│   ├── parsers/              # Session file parsing utilities
 │   │   ├── __init__.py       # Public API exports
-│   │   ├── schema.py         # DDL for star schema tables
-│   │   ├── etl.py            # Main ETL pipeline
-│   │   ├── semantic.py       # Semantic model generation
-│   │   ├── extractors.py     # Code blocks, entities, file extraction
-│   │   ├── enrichment.py     # LLM enrichment functions
-│   │   ├── json_export.py    # JSON export for star schema
-│   │   └── utils.py          # Key generation, tool/model classification
-│   └── templates/
+│   │   └── session.py        # JSONL/JSON session parsing
+│   ├── schemas/              # Schema definitions
+│   │   ├── __init__.py       # Unified exports for both schemas
+│   │   ├── simple/           # Simple 4-table schema
+│   │   │   ├── __init__.py
+│   │   │   ├── schema.py     # DDL for simple schema
+│   │   │   └── etl.py        # Simple schema ETL
+│   │   └── star/             # Star schema (25+ tables)
+│   │       ├── __init__.py   # Public API exports
+│   │       ├── schema.py     # DDL for star schema tables
+│   │       ├── etl.py        # Main ETL pipeline
+│   │       ├── semantic.py   # Semantic model generation
+│   │       ├── extractors.py # Code blocks, entities, file extraction
+│   │       ├── enrichment.py # LLM enrichment functions
+│   │       ├── json_export.py# JSON export for star schema
+│   │       └── utils.py      # Key generation, tool/model classification
+│   ├── explorer/             # Data Explorer SPA
+│   │   ├── index.html
+│   │   ├── css/styles.css
+│   │   └── js/{app,state,duckdb,query-builder,ui}.js
+│   └── templates/            # Jinja2 templates for HTML export
 │       ├── base.html
 │       ├── page.html
-│       ├── star_schema_dashboard.html
-│       └── data_explorer/
-│           ├── index.html
-│           ├── css/styles.css
-│           └── js/{app,state,duckdb,query-builder,ui}.js
+│       └── star_schema_dashboard.html
 ├── tests/
 │   ├── test_claude_code_transcripts.py  # Core functionality tests
-│   ├── test_star_schema.py              # Star schema & ETL tests (116 tests)
-│   └── test_json_export.py              # JSON export tests (31 tests)
+│   ├── test_star_schema.py              # Star schema & ETL tests
+│   └── test_json_export.py              # JSON export tests
 ├── docs/
 │   ├── STAR_SCHEMA.md        # Star schema documentation
 │   └── DATA_EXPLORER.md      # Data explorer documentation
@@ -54,6 +63,7 @@ claude-code-transcripts/
 - `web` - Import from Claude API
 - `json` - Convert specific JSON/JSONL files
 - `all` - Batch convert all sessions
+- `explore` - Launch Data Explorer web server
 
 ### 2. Export Formats
 Three output formats with two schema types:
@@ -65,9 +75,9 @@ Three output formats with two schema types:
 **Star schema** (25+ dimensional tables):
 - `--format duckdb-star` - DuckDB database file
 - `--format json-star` - Directory with meta.json + dimensions/*.json + facts/*.json
-- Modular package at `star_schema/` (schema, etl, semantic, extractors, enrichment, json_export, utils)
+- Modular package at `schemas/star/` (schema, etl, semantic, extractors, enrichment, json_export, utils)
 - See `create_star_schema()`, `run_star_schema_etl()`, `export_star_schema_to_json()` functions
-- Visual explorer at `templates/data_explorer/`
+- Visual explorer at `explorer/`
 - Full documentation in docs/STAR_SCHEMA.md and docs/DATA_EXPLORER.md
 
 **Hybrid CLI**: Use `--schema simple|star` with `--format duckdb|json` for explicit control.
@@ -126,13 +136,13 @@ Run with coverage:
 ## Common Workflows
 
 ### Adding a new dimension
-1. Add CREATE TABLE statement in `create_star_schema()`
-2. Add ETL logic in `run_star_schema_etl()` to populate the dimension
+1. Add CREATE TABLE statement in `schemas/star/schema.py`
+2. Add ETL logic in `schemas/star/etl.py` to populate the dimension
 3. Write tests in `test_star_schema.py`
 4. Update docs/STAR_SCHEMA.md
 
 ### Adding a new fact table
-1. Add CREATE TABLE statement in `create_star_schema()`
+1. Add CREATE TABLE statement in `schemas/star/schema.py`
 2. Add data collection logic in ETL extraction phase
 3. Add INSERT statement in ETL loading phase
 4. Write tests covering schema and ETL
