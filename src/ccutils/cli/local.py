@@ -108,6 +108,11 @@ from ..export import (
     is_flag=True,
     help="Show individual sessions in chains instead of collapsed view.",
 )
+@click.option(
+    "--flat",
+    is_flag=True,
+    help="Show all sessions in a flat list sorted by date (disables project grouping).",
+)
 def local_cmd(
     output,
     output_auto,
@@ -122,6 +127,7 @@ def local_cmd(
     include_subagents,
     include_thinking,
     expand_chains,
+    flat,
 ):
     """Select and convert local Claude Code sessions to HTML or DuckDB.
 
@@ -159,13 +165,15 @@ def local_cmd(
             sessions_by_project[project_key] = []
         sessions_by_project[project_key].append((filepath, summary, slug))
 
-    # Build choices for questionary with project separators
+    # Build choices for questionary with inline project markers
     # Default: chains are collapsed (selecting a chain selects all sessions)
-    # With --expand-chains: individual sessions shown with chain headers
+    # With --expand-chains: individual sessions shown with chain info
+    # With --flat: all sessions in a single list sorted by date
     choices = build_session_choices(
         sessions_by_project,
         expand_chains=expand_chains,
         agent_counts=agent_counts if include_subagents else None,
+        flat=flat,
     )
 
     # Multi-select with checkbox

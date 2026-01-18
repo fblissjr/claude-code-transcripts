@@ -22,6 +22,7 @@ from .discovery import (
     find_local_sessions,
     flatten_selected_sessions,
     get_project_display_name,
+    get_terminal_width,
     matches_project_filter,
 )
 
@@ -42,5 +43,6 @@ __all__ = [
     "find_local_sessions",
     "flatten_selected_sessions",
     "get_project_display_name",
+    "get_terminal_width",
     "matches_project_filter",
 ]

@@ -4,12 +4,25 @@ This module provides functions for finding and organizing Claude Code sessions
 across project directories.
 """
 
+import shutil
 from datetime import datetime
 from pathlib import Path
 
 import questionary
 
 from .session import extract_session_metadata, extract_session_slug, get_session_summary
+
+
+def get_terminal_width():
+    """Get the current terminal width.
+
+    Returns:
+        Terminal width in columns, defaults to 80 if unable to determine.
+    """
+    try:
+        return shutil.get_terminal_size().columns
+    except (AttributeError, ValueError):
+        return 80
 
 
 def find_local_sessions(folder, limit=10, project_filter=None):
@@ -67,25 +80,56 @@ def flatten_selected_sessions(selected):
     return result
 
 
-def build_session_choices(sessions_by_project, expand_chains=False, agent_counts=None):
+def build_session_choices(
+    sessions_by_project, expand_chains=False, agent_counts=None, flat=False
+):
     """Build questionary choices from sessions, with chain grouping support.
+
+    Uses inline project markers instead of separators for better space efficiency.
 
     Args:
         sessions_by_project: Dict mapping project_key to list of (filepath, summary, slug) tuples
         expand_chains: If False (default), group sessions with same slug into single choice.
                       If True, show individual sessions with chain headers.
         agent_counts: Optional dict mapping filepath to agent count for display
+        flat: If True, merge all projects into a single flat list sorted by mtime.
+              In flat mode, slug grouping is disabled since chains don't span projects.
 
     Returns:
-        List of questionary.Choice and questionary.Separator objects.
+        List of questionary.Choice objects with inline project prefixes.
     """
     agent_counts = agent_counts or {}
     choices = []
+    terminal_width = get_terminal_width()
 
+    # Calculate max project name width for consistent padding across all projects
+    max_project_width = 20
+
+    # In flat mode, merge all sessions into a single list
+    if flat:
+        all_sessions = []
+        for project_key, sessions in sessions_by_project.items():
+            project_name = get_project_display_name(project_key)
+            for filepath, summary, slug in sessions:
+                all_sessions.append((filepath, summary, project_name))
+        # Sort by mtime, most recent first (preserves caller's sort if already sorted)
+        all_sessions.sort(key=lambda x: x[0].stat().st_mtime, reverse=True)
+
+        # In flat mode, just add all sessions individually with their project markers
+        for filepath, summary, project_name in all_sessions:
+            display = _format_session_display(
+                filepath,
+                summary,
+                agent_counts.get(filepath, 0),
+                project_name=project_name,
+                terminal_width=terminal_width,
+            )
+            choices.append(questionary.Choice(title=display, value=filepath))
+        return choices
+
+    # Non-flat mode: process by project with slug grouping
     for project_key, sessions in sessions_by_project.items():
-        # Add project separator with full display name
         project_name = get_project_display_name(project_key)
-        choices.append(questionary.Separator(f"--- {project_name} ---"))
 
         # Group sessions by slug
         slug_groups = {}  # slug -> list of (filepath, summary, slug)
@@ -100,26 +144,31 @@ def build_session_choices(sessions_by_project, expand_chains=False, agent_counts
                 standalone.append((filepath, summary, slug))
 
         if expand_chains:
-            # Expanded mode: show individual sessions with chain headers
+            # Expanded mode: show individual sessions with chain info in display
             for slug, chain_sessions in slug_groups.items():
-                if len(chain_sessions) > 1:
-                    # Add a separator for the chain
-                    choices.append(
-                        questionary.Separator(
-                            f"  -- {slug} ({len(chain_sessions)} sessions) --"
-                        )
-                    )
-                # Add individual sessions
+                # Add individual sessions with project prefix
                 for filepath, summary, _ in chain_sessions:
+                    # Add chain indicator for multi-session chains
+                    chain_suffix = (
+                        f" [{len(chain_sessions)}]" if len(chain_sessions) > 1 else ""
+                    )
                     display = _format_session_display(
-                        filepath, summary, agent_counts.get(filepath, 0)
+                        filepath,
+                        summary + chain_suffix,
+                        agent_counts.get(filepath, 0),
+                        project_name=project_name,
+                        terminal_width=terminal_width,
                     )
                     choices.append(questionary.Choice(title=display, value=filepath))
 
             # Add standalone sessions
             for filepath, summary, _ in standalone:
                 display = _format_session_display(
-                    filepath, summary, agent_counts.get(filepath, 0)
+                    filepath,
+                    summary,
+                    agent_counts.get(filepath, 0),
+                    project_name=project_name,
+                    terminal_width=terminal_width,
                 )
                 choices.append(questionary.Choice(title=display, value=filepath))
 
@@ -151,14 +200,21 @@ def build_session_choices(sessions_by_project, expand_chains=False, agent_counts
                     else:
                         date_range = f"{oldest_time.strftime('%b %d %H:%M')} - {newest_time.strftime('%b %d %H:%M')}"
 
-                    # Truncate summary for display
-                    max_summary = 50
-                    if latest_summary and len(latest_summary) > max_summary:
-                        latest_summary = latest_summary[: max_summary - 3] + "..."
+                    # Calculate dynamic truncation for chain summary
+                    # Project prefix + chain info takes about 60 chars on line 1
+                    available_summary = max(30, terminal_width - 80)
+                    if latest_summary and len(latest_summary) > available_summary:
+                        latest_summary = latest_summary[: available_summary - 3] + "..."
+
+                    # Format project prefix for consistent width
+                    proj_display = project_name
+                    if len(proj_display) > max_project_width:
+                        proj_display = proj_display[: max_project_width - 2] + ".."
+                    proj_prefix = f"[{proj_display}]".ljust(max_project_width + 2)
 
                     # Multi-line display for better readability
-                    line1 = f"[{len(chain_sessions)} sessions] {slug}"
-                    line2 = f"    {total_size:,.0f} KB | {date_range}"
+                    line1 = f"{proj_prefix} [{len(chain_sessions)} sessions] {slug}"
+                    line2 = f"{''.ljust(max_project_width + 3)}{total_size:,.0f} KB | {date_range}"
                     if latest_summary:
                         line2 += f' | "{latest_summary}"'
 
@@ -168,47 +224,84 @@ def build_session_choices(sessions_by_project, expand_chains=False, agent_counts
                     # Single session with slug - treat as standalone
                     filepath, summary, _ = chain_sessions[0]
                     display = _format_session_display(
-                        filepath, summary, agent_counts.get(filepath, 0)
+                        filepath,
+                        summary,
+                        agent_counts.get(filepath, 0),
+                        project_name=project_name,
+                        terminal_width=terminal_width,
                     )
                     choices.append(questionary.Choice(title=display, value=filepath))
 
             # Add standalone sessions
             for filepath, summary, _ in standalone:
                 display = _format_session_display(
-                    filepath, summary, agent_counts.get(filepath, 0)
+                    filepath,
+                    summary,
+                    agent_counts.get(filepath, 0),
+                    project_name=project_name,
+                    terminal_width=terminal_width,
                 )
                 choices.append(questionary.Choice(title=display, value=filepath))
 
     return choices
 
 
-def _format_session_display(filepath, summary, agent_count=0):
+def _format_session_display(
+    filepath, summary, agent_count=0, project_name=None, terminal_width=None
+):
     """Format a single session for display in the selection list.
 
     Args:
         filepath: Path to the session file
         summary: Session summary text
         agent_count: Number of related agent sessions
+        project_name: Project name to show as inline prefix (optional)
+        terminal_width: Terminal width for dynamic truncation (optional)
 
     Returns:
         Formatted display string.
     """
+    if terminal_width is None:
+        terminal_width = get_terminal_width()
+
     stat = filepath.stat()
     mod_time = datetime.fromtimestamp(stat.st_mtime)
     size_kb = stat.st_size / 1024
     date_str = mod_time.strftime("%Y-%m-%d %H:%M")
-
-    # Truncate summary
-    max_summary = 45
-    if len(summary) > max_summary:
-        summary = summary[: max_summary - 3] + "..."
 
     # Build suffix for agents
     suffix = ""
     if agent_count > 0:
         suffix = f" (+{agent_count} agents)"
 
-    return f"{date_str}  {size_kb:5.0f} KB  {summary}{suffix}"
+    # Calculate fixed-width portions
+    # Format: [project] date  size KB  summary(suffix)
+    # Project prefix: [name] + space = max 22 chars (20 for name + brackets + space)
+    # Date: 16 chars (YYYY-MM-DD HH:MM)
+    # Size: 9 chars (5 digits + " KB" + 2 spaces)
+    # Padding: ~4 chars for spacing
+
+    max_project_width = 20
+    project_prefix = ""
+    if project_name:
+        # Truncate or pad project name for consistent width
+        if len(project_name) > max_project_width:
+            project_name = project_name[: max_project_width - 2] + ".."
+        project_prefix = f"[{project_name}]".ljust(max_project_width + 2) + " "
+
+    fixed_width = len(project_prefix) + 16 + 9 + 4 + len(suffix)
+
+    # Calculate available space for summary
+    available = terminal_width - fixed_width
+    min_summary_width = 20  # Always show at least this much
+
+    max_summary = max(min_summary_width, available)
+
+    # Truncate summary if needed
+    if len(summary) > max_summary:
+        summary = summary[: max_summary - 3] + "..."
+
+    return f"{project_prefix}{date_str}  {size_kb:5.0f} KB  {summary}{suffix}"
 
 
 def find_agent_sessions(session_paths, recursive=True):

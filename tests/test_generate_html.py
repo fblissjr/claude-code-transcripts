@@ -2012,11 +2012,12 @@ class TestBuildSessionChoices:
         chain_choice = value_choices[0]
 
         # Should show the latest (most recent) summary, not the old one
-        assert "Latest summary from recent session" in chain_choice.title
+        # Note: May be truncated with dynamic width, so check for prefix
+        assert "Latest summary from recent" in chain_choice.title
         assert "Old summary from first" not in chain_choice.title
 
     def test_expanded_chains_shows_individual_sessions(self, tmp_path):
-        """Test that expanded mode shows individual sessions with chain headers."""
+        """Test that expanded mode shows individual sessions with inline project markers."""
         from ccutils import build_session_choices
         import questionary
 
@@ -2045,12 +2046,11 @@ class TestBuildSessionChoices:
 
         choices = build_session_choices(sessions_by_project, expand_chains=True)
 
-        # Count separators and value choices
+        # No separators - using inline project markers instead
         separators = [c for c in choices if isinstance(c, questionary.Separator)]
         value_choices = [c for c in choices if not isinstance(c, questionary.Separator)]
 
-        # Should have project separator + chain separator
-        assert len(separators) >= 2
+        assert len(separators) == 0, "Should not use Separator objects"
 
         # Should have 2 individual session choices (not grouped)
         assert len(value_choices) == 2
@@ -2060,6 +2060,8 @@ class TestBuildSessionChoices:
             assert not isinstance(
                 c.value, list
             ), "Expanded mode should have individual paths"
+            # Should have inline project marker
+            assert "[" in c.title and "]" in c.title
 
 
 class TestFlattenSelectedSessions:
@@ -2117,3 +2119,294 @@ class TestFlattenSelectedSessions:
         result = flatten_selected_sessions([])
 
         assert result == []
+
+
+class TestDynamicTruncation:
+    """Tests for dynamic session display truncation based on terminal width."""
+
+    def test_format_session_display_uses_dynamic_width(self, tmp_path):
+        """Test that _format_session_display uses terminal_width parameter."""
+        from ccutils.parsers.discovery import _format_session_display
+
+        session = tmp_path / "test-session.jsonl"
+        session.write_text('{"type":"user","message":{"content":"Hello"}}\n')
+
+        long_summary = "This is a very long summary that should be truncated based on available terminal width"
+
+        # With wide terminal (200 cols), should show more text
+        wide_display = _format_session_display(
+            session, long_summary, terminal_width=200
+        )
+
+        # With narrow terminal (80 cols), should truncate more aggressively
+        narrow_display = _format_session_display(
+            session, long_summary, terminal_width=80
+        )
+
+        # Wide display should show more of the summary than narrow
+        assert len(wide_display) > len(narrow_display)
+        # Both should still be truncated (not full 86 chars of summary)
+        assert "..." in narrow_display
+
+    def test_format_session_display_respects_minimum_summary_width(self, tmp_path):
+        """Even with very narrow terminal, should show at least some summary."""
+        from ccutils.parsers.discovery import _format_session_display
+
+        session = tmp_path / "test-session.jsonl"
+        session.write_text('{"type":"user","message":{"content":"Hello"}}\n')
+
+        summary = "Important session summary"
+
+        # Very narrow terminal
+        display = _format_session_display(session, summary, terminal_width=60)
+
+        # Should still include some summary text (not just metadata)
+        assert any(
+            word in display for word in ["Important", "session", "summary", "..."]
+        )
+
+    def test_get_terminal_width_returns_sensible_default(self):
+        """Test terminal width helper returns sensible default."""
+        from ccutils.parsers.discovery import get_terminal_width
+
+        width = get_terminal_width()
+
+        # Should return a reasonable width (not 0 or negative)
+        assert width >= 80
+        assert width <= 500  # Reasonable upper bound
+
+
+class TestInlineProjectMarkers:
+    """Tests for inline project markers replacing Separator objects."""
+
+    def test_build_session_choices_no_separators(self, tmp_path):
+        """Test that build_session_choices no longer uses Separator objects."""
+        from ccutils import build_session_choices
+        import questionary
+
+        project = tmp_path / "test-project"
+        project.mkdir()
+
+        session = project / "session.jsonl"
+        session.write_text(
+            '{"type":"summary","summary":"Test session"}\n'
+            '{"type":"user","timestamp":"2025-01-01T00:00:00Z","message":{"role":"user","content":"Hi"}}\n'
+        )
+
+        sessions_by_project = {"test-project": [(session, "Test session", None)]}
+
+        choices = build_session_choices(sessions_by_project, expand_chains=False)
+
+        # Should NOT contain any Separator objects
+        separators = [c for c in choices if isinstance(c, questionary.Separator)]
+        assert len(separators) == 0, "Should not use Separator objects"
+
+    def test_build_session_choices_includes_project_prefix(self, tmp_path):
+        """Test that each choice includes inline project name prefix."""
+        from ccutils import build_session_choices
+        import questionary
+
+        project = tmp_path / "test-project"
+        project.mkdir()
+
+        session = project / "session.jsonl"
+        session.write_text(
+            '{"type":"summary","summary":"Test session"}\n'
+            '{"type":"user","timestamp":"2025-01-01T00:00:00Z","message":{"role":"user","content":"Hi"}}\n'
+        )
+
+        sessions_by_project = {"test-project": [(session, "Test session", None)]}
+
+        choices = build_session_choices(sessions_by_project, expand_chains=False)
+        value_choices = [c for c in choices if not isinstance(c, questionary.Separator)]
+
+        # Each choice title should include project name in brackets
+        for choice in value_choices:
+            assert "[" in choice.title and "]" in choice.title
+            # Project name "test-project" should appear
+            assert (
+                "test-project" in choice.title.lower() or "test" in choice.title.lower()
+            )
+
+    def test_multiple_projects_inline_markers(self, tmp_path):
+        """Test multiple projects show inline markers for each."""
+        from ccutils import build_session_choices
+        import questionary
+
+        # Create two projects
+        project1 = tmp_path / "project-alpha"
+        project1.mkdir()
+        session1 = project1 / "session1.jsonl"
+        session1.write_text(
+            '{"type":"summary","summary":"Alpha session"}\n'
+            '{"type":"user","timestamp":"2025-01-01T00:00:00Z","message":{"role":"user","content":"Hi"}}\n'
+        )
+
+        project2 = tmp_path / "project-beta"
+        project2.mkdir()
+        session2 = project2 / "session2.jsonl"
+        session2.write_text(
+            '{"type":"summary","summary":"Beta session"}\n'
+            '{"type":"user","timestamp":"2025-01-02T00:00:00Z","message":{"role":"user","content":"Hi"}}\n'
+        )
+
+        sessions_by_project = {
+            "project-alpha": [(session1, "Alpha session", None)],
+            "project-beta": [(session2, "Beta session", None)],
+        }
+
+        choices = build_session_choices(sessions_by_project, expand_chains=False)
+        value_choices = [c for c in choices if not isinstance(c, questionary.Separator)]
+
+        # Should have 2 choices (no separators)
+        assert len(value_choices) == 2
+
+        # Titles should include respective project names
+        titles = [c.title for c in value_choices]
+        assert any("alpha" in t.lower() for t in titles)
+        assert any("beta" in t.lower() for t in titles)
+
+    def test_project_name_consistently_padded(self, tmp_path):
+        """Test project names are padded to consistent width."""
+        from ccutils import build_session_choices
+        import questionary
+
+        # Create projects with different name lengths
+        short_proj = tmp_path / "api"
+        short_proj.mkdir()
+        session1 = short_proj / "session1.jsonl"
+        session1.write_text('{"type":"user","message":{"content":"Hi"}}\n')
+
+        long_proj = tmp_path / "my-very-long-project-name"
+        long_proj.mkdir()
+        session2 = long_proj / "session2.jsonl"
+        session2.write_text('{"type":"user","message":{"content":"Hi"}}\n')
+
+        sessions_by_project = {
+            "api": [(session1, "Short project session", None)],
+            "my-very-long-project-name": [(session2, "Long project session", None)],
+        }
+
+        choices = build_session_choices(sessions_by_project, expand_chains=False)
+        value_choices = [c for c in choices if not isinstance(c, questionary.Separator)]
+
+        # Extract the project prefix portions (text before the date)
+        # The format should be: [project_name] date size summary
+        titles = [c.title for c in value_choices]
+
+        # Find position of first digit (start of date) to compare prefix lengths
+        def get_prefix_length(title):
+            for i, char in enumerate(title):
+                if char.isdigit():
+                    return i
+            return len(title)
+
+        prefix_lengths = [get_prefix_length(t) for t in titles]
+
+        # Prefixes should be same length (padded consistently)
+        assert (
+            len(set(prefix_lengths)) == 1
+        ), f"Project prefixes should be consistently padded: {titles}"
+
+
+class TestFlatMode:
+    """Tests for flat mode session display (no project grouping)."""
+
+    def test_flat_mode_merges_projects(self, tmp_path):
+        """Test that flat=True shows all sessions in one list."""
+        from ccutils import build_session_choices
+        import questionary
+        import time
+
+        # Create two projects
+        project1 = tmp_path / "project-alpha"
+        project1.mkdir()
+        session1 = project1 / "session1.jsonl"
+        session1.write_text(
+            '{"type":"summary","summary":"Alpha session"}\n'
+            '{"type":"user","timestamp":"2025-01-01T00:00:00Z","message":{"role":"user","content":"Hi"}}\n'
+        )
+        time.sleep(0.05)  # Ensure different mtimes
+
+        project2 = tmp_path / "project-beta"
+        project2.mkdir()
+        session2 = project2 / "session2.jsonl"
+        session2.write_text(
+            '{"type":"summary","summary":"Beta session"}\n'
+            '{"type":"user","timestamp":"2025-01-02T00:00:00Z","message":{"role":"user","content":"Hi"}}\n'
+        )
+
+        sessions_by_project = {
+            "project-alpha": [(session1, "Alpha session", None)],
+            "project-beta": [(session2, "Beta session", None)],
+        }
+
+        # Without flat mode - sessions are separate per project
+        regular_choices = build_session_choices(
+            sessions_by_project, expand_chains=False, flat=False
+        )
+        regular_value_choices = [
+            c for c in regular_choices if not isinstance(c, questionary.Separator)
+        ]
+
+        # With flat mode - all sessions in one merged list
+        flat_choices = build_session_choices(
+            sessions_by_project, expand_chains=False, flat=True
+        )
+        flat_value_choices = [
+            c for c in flat_choices if not isinstance(c, questionary.Separator)
+        ]
+
+        # Both should have same number of choices (no separators in either)
+        assert len(regular_value_choices) == 2
+        assert len(flat_value_choices) == 2
+
+        # Flat mode should still include project markers
+        for choice in flat_value_choices:
+            assert "[" in choice.title and "]" in choice.title
+
+    def test_flat_mode_preserves_sort_order(self, tmp_path):
+        """Test that flat mode preserves modification time sort order."""
+        from ccutils import build_session_choices
+        import questionary
+        import time
+
+        # Create sessions across multiple projects with specific mtimes
+        project1 = tmp_path / "project-alpha"
+        project1.mkdir()
+        oldest = project1 / "oldest.jsonl"
+        oldest.write_text('{"type":"user","message":{"content":"Oldest"}}\n')
+        time.sleep(0.05)
+
+        project2 = tmp_path / "project-beta"
+        project2.mkdir()
+        middle = project2 / "middle.jsonl"
+        middle.write_text('{"type":"user","message":{"content":"Middle"}}\n')
+        time.sleep(0.05)
+
+        newest = project1 / "newest.jsonl"
+        newest.write_text('{"type":"user","message":{"content":"Newest"}}\n')
+
+        sessions_by_project = {
+            # Sessions provided in mtime order (most recent first)
+            "project-alpha": [
+                (newest, "Newest session", None),
+                (oldest, "Oldest session", None),
+            ],
+            "project-beta": [(middle, "Middle session", None)],
+        }
+
+        flat_choices = build_session_choices(
+            sessions_by_project, expand_chains=False, flat=True
+        )
+        flat_value_choices = [
+            c for c in flat_choices if not isinstance(c, questionary.Separator)
+        ]
+
+        # Should maintain order as provided (caller is responsible for sorting)
+        assert len(flat_value_choices) == 3
+        titles = [c.title for c in flat_value_choices]
+
+        # First should be newest, last should be oldest
+        assert "Newest" in titles[0]
+        assert "Oldest" in titles[-1]
