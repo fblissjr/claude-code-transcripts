@@ -6,16 +6,16 @@ A dimensional data model for Claude Code transcript analytics, with 25+ tables f
 
 ```bash
 # Generate star schema DuckDB from local sessions
-claude-code-transcripts local --format duckdb-star -o ./analytics
+ccutils local --format duckdb-star -o ./analytics
 
 # Or export to JSON directory structure
-claude-code-transcripts local --format json-star -o ./star-export/
+ccutils local --format json-star -o ./star-export/
 
 # Or generate from all sessions
-claude-code-transcripts all --format duckdb-star -o ./analytics
+ccutils all --format duckdb-star -o ./analytics
 
 # Launch the visual Data Explorer
-claude-code-transcripts explore ./analytics/archive.duckdb
+ccutils explore ./analytics/archive.duckdb
 
 # Query directly with DuckDB CLI
 duckdb ./analytics/archive.duckdb
@@ -556,7 +556,7 @@ Staging table for raw extracted data (used during ETL processing).
 Dimension keys are generated using MD5 hashes of natural keys:
 
 ```python
-from claude_code_transcripts import generate_dimension_key
+from ccutils import generate_dimension_key
 
 # Single natural key
 tool_key = generate_dimension_key("Write")
@@ -804,7 +804,7 @@ For programmatic access, use the Python API directly.
 
 ```python
 from pathlib import Path
-from claude_code_transcripts import create_star_schema, run_star_schema_etl
+from ccutils import create_star_schema, run_star_schema_etl
 
 # Create schema
 db_path = Path("./analytics.duckdb")
@@ -836,7 +836,7 @@ conn.close()
 The schema includes tables for LLM-enriched classifications that are populated separately from the main ETL:
 
 ```python
-from claude_code_transcripts import (
+from ccutils import (
     create_star_schema,
     run_star_schema_etl,
     run_llm_enrichment,
@@ -895,7 +895,7 @@ print(f"Enriched {result['sessions_enriched']} sessions")
 Export the star schema to JSON format for use with other tools or data pipelines:
 
 ```python
-from claude_code_transcripts import (
+from ccutils import (
     create_star_schema,
     run_star_schema_etl,
     create_semantic_model,
@@ -957,7 +957,7 @@ Or use the CLI:
 
 ```bash
 # Export star schema to JSON directory
-claude-code-transcripts local --format json-star -o ./star-export/
+ccutils local --format json-star -o ./star-export/
 ```
 
 ## Design Decisions

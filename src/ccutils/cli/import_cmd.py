@@ -1,5 +1,6 @@
 """Import command for Claude.ai account exports."""
 
+import html
 import json
 import tempfile
 import webbrowser
@@ -248,7 +249,7 @@ def _export_to_html(parsed, output, open_browser):
 
 def _create_multi_session_index(output_dir, sessions, metadata):
     """Create an index.html linking to all session directories."""
-    html = """<!DOCTYPE html>
+    html_content = """<!DOCTYPE html>
 <html>
 <head>
     <title>Claude.ai Export</title>
@@ -271,21 +272,21 @@ def _create_multi_session_index(output_dir, sessions, metadata):
     )
 
     for session_id, loglines in sessions.items():
-        session_name = session_id[:8]
+        session_name = html.escape(session_id[:8])
         msg_count = len(loglines)
         # Try to get conversation name from metadata or first message
-        conv_name = session_id  # fallback
-        html += f"""        <div class="session">
+        conv_name = html.escape(session_id)  # fallback
+        html_content += f"""        <div class="session">
             <a href="{session_name}/index.html">{conv_name}</a>
             <div class="meta">{msg_count} messages</div>
         </div>
 """
 
-    html += """    </div>
+    html_content += """    </div>
 </body>
 </html>"""
 
-    (output_dir / "index.html").write_text(html)
+    (output_dir / "index.html").write_text(html_content)
 
 
 def _export_to_duckdb(parsed, output, include_thinking):

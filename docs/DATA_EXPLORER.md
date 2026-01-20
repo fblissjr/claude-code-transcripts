@@ -6,26 +6,26 @@ A web application for exploring DuckDB star schema databases. Single HTML file w
 
 ```bash
 # Generate a star schema database from local sessions
-claude-code-transcripts local --format duckdb-star -o ./my-analytics
+ccutils local --format duckdb-star -o ./my-analytics
 
 # Launch the explorer and load the database
-claude-code-transcripts explore ./my-analytics/archive.duckdb
+ccutils explore ./my-analytics/archive.duckdb
 
 # Or just launch the explorer (load file manually)
-claude-code-transcripts explore
+ccutils explore
 ```
 
 ## Quick Start (Python API)
 
 ```python
-from claude_code_transcripts import create_star_schema, run_star_schema_etl
+from ccutils import create_star_schema, run_star_schema_etl
 
 conn = create_star_schema("analytics.duckdb")
 run_star_schema_etl(conn, "session.jsonl", project_name="My Project")
 conn.close()
 ```
 
-Then launch: `claude-code-transcripts explore analytics.duckdb`
+Then launch: `ccutils explore analytics.duckdb`
 
 ## Features
 

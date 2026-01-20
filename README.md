@@ -41,6 +41,8 @@ ccutils explore ./analytics/archive.duckdb
 | `json` | Convert specific JSON/JSONL file or URL |
 | `all` | Batch convert all sessions |
 | `explore` | Launch Data Explorer web UI |
+| `import` | Import Claude.ai account exports (Settings > Privacy) |
+| `schema` | Inspect JSON structure without exposing content |
 
 ## Export Formats
 
