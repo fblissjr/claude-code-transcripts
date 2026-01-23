@@ -8,7 +8,11 @@ import click
 
 from ..parsers import find_all_sessions
 from ..schemas import resolve_schema_format
-from ..export import generate_batch_html, generate_duckdb_archive, generate_star_json_archive
+from ..export import (
+    generate_batch_html,
+    generate_duckdb_archive,
+    generate_star_json_archive,
+)
 
 
 @click.command("all")

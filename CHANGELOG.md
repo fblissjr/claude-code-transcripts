@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Star schema support in `all` command**: Full star schema support for batch exports
+  - New format options: `--format duckdb-star`, `--format json-star`
+  - Uses 25+ dimensional tables for richer analytics
+  - Progress reporting shows row counts, DB size, and processing rate
+- **Performance options for batch processing**:
+  - `-j/--jobs N`: Parallel workers for processing (default: 1)
+  - `--batch-size N`: Sessions per transaction batch (default: 10)
+  - Progress callback now includes stats (rows_inserted, db_size_mb, rate)
+- **Enhanced progress reporting**: Shows rows processed, storage size, and sessions/sec rate
 - **Claude.ai account export import**: New `import` command to convert Claude.ai account exports (from Settings > Privacy)
   - Supports all existing output formats: HTML, DuckDB
   - Lists conversations: `ccutils import ./export --list`
