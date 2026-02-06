@@ -2420,3 +2420,147 @@ class TestCreateSemanticModel:
 
         assert len(result) == 0, f"Found duplicate entries: {result}"
         conn.close()
+
+
+class TestToolCallsExtractedColumns:
+    """Tests for un-nested tool parameter columns in fact_tool_calls."""
+
+    def test_fact_tool_calls_has_extracted_columns(self, output_dir):
+        """Test that fact_tool_calls has the new extracted parameter columns."""
+        db_path = output_dir / "test.duckdb"
+        conn = create_star_schema(db_path)
+
+        columns = conn.execute("DESCRIBE fact_tool_calls").fetchall()
+        column_names = [c[0] for c in columns]
+
+        assert "file_path" in column_names
+        assert "command" in column_names
+        assert "pattern" in column_names
+        assert "query_text" in column_names
+        conn.close()
+
+    def test_etl_extracts_file_path_for_write(self, sample_session_file, output_dir):
+        """Test that ETL extracts file_path for Write tool calls."""
+        db_path = output_dir / "test.duckdb"
+        conn = create_star_schema(db_path)
+        run_star_schema_etl(conn, sample_session_file, "test-project")
+
+        result = conn.execute(
+            """SELECT tool_call_id, file_path
+               FROM fact_tool_calls ftc
+               JOIN dim_tool dt ON ftc.tool_key = dt.tool_key
+               WHERE dt.tool_name = 'Write'"""
+        ).fetchone()
+
+        assert result is not None
+        assert result[1] == "/home/user/project/hello.py"
+        conn.close()
+
+    def test_etl_extracts_file_path_for_read(self, sample_session_file, output_dir):
+        """Test that ETL extracts file_path for Read tool calls."""
+        db_path = output_dir / "test.duckdb"
+        conn = create_star_schema(db_path)
+        run_star_schema_etl(conn, sample_session_file, "test-project")
+
+        result = conn.execute(
+            """SELECT tool_call_id, file_path
+               FROM fact_tool_calls ftc
+               JOIN dim_tool dt ON ftc.tool_key = dt.tool_key
+               WHERE dt.tool_name = 'Read'"""
+        ).fetchone()
+
+        assert result is not None
+        assert result[1] == "/home/user/project/hello.py"
+        conn.close()
+
+
+class TestFactToolInputParams:
+    """Tests for fact_tool_input_params table."""
+
+    def test_fact_tool_input_params_table_exists(self, output_dir):
+        """Test that fact_tool_input_params table is created."""
+        db_path = output_dir / "test.duckdb"
+        conn = create_star_schema(db_path)
+
+        columns = conn.execute("DESCRIBE fact_tool_input_params").fetchall()
+        column_names = [c[0] for c in columns]
+
+        assert "param_id" in column_names
+        assert "tool_call_id" in column_names
+        assert "session_key" in column_names
+        assert "param_key" in column_names
+        assert "param_value_text" in column_names
+        assert "param_value_number" in column_names
+        assert "param_value_bool" in column_names
+        conn.close()
+
+    def test_etl_populates_tool_input_params(self, sample_session_file, output_dir):
+        """Test that ETL populates fact_tool_input_params."""
+        db_path = output_dir / "test.duckdb"
+        conn = create_star_schema(db_path)
+        run_star_schema_etl(conn, sample_session_file, "test-project")
+
+        result = conn.execute("SELECT COUNT(*) FROM fact_tool_input_params").fetchone()
+
+        # Should have params from Write and Read tool calls
+        assert result[0] > 0
+        conn.close()
+
+    def test_tool_input_params_has_file_path_param(
+        self, sample_session_file, output_dir
+    ):
+        """Test that file_path parameters are extracted to params table."""
+        db_path = output_dir / "test.duckdb"
+        conn = create_star_schema(db_path)
+        run_star_schema_etl(conn, sample_session_file, "test-project")
+
+        result = conn.execute(
+            """SELECT param_value_text
+               FROM fact_tool_input_params
+               WHERE param_key = 'file_path'"""
+        ).fetchall()
+
+        file_paths = [r[0] for r in result]
+        assert "/home/user/project/hello.py" in file_paths
+        conn.close()
+
+    def test_tool_input_params_has_content_param(self, sample_session_file, output_dir):
+        """Test that content parameters are extracted to params table."""
+        db_path = output_dir / "test.duckdb"
+        conn = create_star_schema(db_path)
+        run_star_schema_etl(conn, sample_session_file, "test-project")
+
+        result = conn.execute(
+            """SELECT param_value_text
+               FROM fact_tool_input_params
+               WHERE param_key = 'content'"""
+        ).fetchone()
+
+        assert result is not None
+        assert "Hello, World!" in result[0]
+        conn.close()
+
+
+class TestToolInputParamsExport:
+    """Tests for fact_tool_input_params JSON export."""
+
+    def test_json_export_includes_tool_input_params(
+        self, sample_session_file, output_dir
+    ):
+        """Test that JSON export includes fact_tool_input_params."""
+        from ccutils import export_star_schema_to_json
+
+        db_path = output_dir / "test.duckdb"
+        conn = create_star_schema(db_path)
+        run_star_schema_etl(conn, sample_session_file, "test-project")
+
+        json_dir = output_dir / "json_export"
+        export_star_schema_to_json(conn, json_dir)
+
+        params_file = json_dir / "facts" / "fact_tool_input_params.json"
+        assert params_file.exists()
+
+        with open(params_file) as f:
+            data = json.load(f)
+        assert len(data) > 0
+        conn.close()

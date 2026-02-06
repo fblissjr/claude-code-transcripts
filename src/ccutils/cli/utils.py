@@ -109,15 +109,18 @@ def resolve_credentials(token, org_uuid):
 def format_session_for_display(session_data):
     """Format a session for display in the list or picker.
 
+    Shows repo first (if available), then date, then title.
     Returns a formatted string.
     """
-    session_id = session_data.get("id", "unknown")
     title = session_data.get("title", "Untitled")
     created_at = session_data.get("created_at", "")
+    repo = session_data.get("repo")
     # Truncate title if too long
-    if len(title) > 60:
-        title = title[:57] + "..."
-    return f"{session_id}  {created_at[:19] if created_at else 'N/A':19}  {title}"
+    if len(title) > 50:
+        title = title[:47] + "..."
+    repo_display = repo if repo else "(no repo)"
+    date_display = created_at[:19] if created_at else "N/A"
+    return f"{repo_display:30}  {date_display:19}  {title}"
 
 
 def generate_html_from_session_data(session_data, output_dir, github_repo=None):

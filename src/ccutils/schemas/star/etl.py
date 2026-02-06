@@ -94,6 +94,9 @@ def run_star_schema_etl(
     tool_chain_data = []
     prev_tool_call = None
 
+    # Tool input params tracking
+    tool_input_params_data = []
+
     with open(session_path, "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
@@ -216,6 +219,25 @@ def run_star_schema_etl(
 
                         input_json = json.dumps(tool_input)
                         input_summary = input_json[:truncate_output]
+
+                        # Extract common parameters for direct columns
+                        extracted_file_path = extract_file_path_from_tool(
+                            tool_name, tool_input
+                        )
+                        extracted_command = (
+                            tool_input.get("command")
+                            if tool_name.lower() == "bash"
+                            else None
+                        )
+                        extracted_pattern = (
+                            tool_input.get("pattern")
+                            if tool_name.lower() == "grep"
+                            else None
+                        )
+                        extracted_query = tool_input.get("query") or tool_input.get(
+                            "url"
+                        )
+
                         tool_use_map[tool_use_id] = {
                             "message_id": message_id,
                             "tool_name": tool_name,
@@ -226,7 +248,42 @@ def run_star_schema_etl(
                             "timestamp": timestamp,
                             "date_key": date_key,
                             "time_key": time_key,
+                            "file_path": extracted_file_path,
+                            "command": extracted_command,
+                            "pattern": extracted_pattern,
+                            "query_text": extracted_query,
                         }
+
+                        # Populate tool_input_params for granular exploration
+                        for param_key, param_value in tool_input.items():
+                            if param_value is None:
+                                continue
+                            param_id = f"{tool_use_id}-{param_key}"
+                            param_text = None
+                            param_number = None
+                            param_bool = None
+
+                            if isinstance(param_value, bool):
+                                param_bool = param_value
+                            elif isinstance(param_value, (int, float)):
+                                param_number = float(param_value)
+                            elif isinstance(param_value, str):
+                                param_text = param_value[:2000]
+                            else:
+                                # For complex types (list, dict), serialize
+                                param_text = json.dumps(param_value)[:2000]
+
+                            tool_input_params_data.append(
+                                {
+                                    "param_id": param_id,
+                                    "tool_call_id": tool_use_id,
+                                    "session_key": session_key,
+                                    "param_key": param_key,
+                                    "param_value_text": param_text,
+                                    "param_value_number": param_number,
+                                    "param_value_bool": param_bool,
+                                }
+                            )
 
                         # Track file operations
                         file_path = extract_file_path_from_tool(tool_name, tool_input)
@@ -338,6 +395,10 @@ def run_star_schema_etl(
                                     "input_json": tool_info["input_json"],
                                     "input_summary": tool_info["input_summary"],
                                     "output_text": output_text,
+                                    "file_path": tool_info["file_path"],
+                                    "command": tool_info["command"],
+                                    "pattern": tool_info["pattern"],
+                                    "query_text": tool_info["query_text"],
                                 }
                             )
 
@@ -543,6 +604,7 @@ def run_star_schema_etl(
         errors_data,
         entity_mentions_data,
         tool_chain_data,
+        tool_input_params_data,
     )
 
 
@@ -790,6 +852,7 @@ def _load_facts(
     errors_data,
     entity_mentions_data,
     tool_chain_data,
+    tool_input_params_data,
 ):
     """Load all fact tables."""
 
@@ -849,7 +912,7 @@ def _load_facts(
     # fact_tool_calls
     for tc in tool_calls_data:
         conn.execute(
-            """INSERT INTO fact_tool_calls VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            """INSERT INTO fact_tool_calls VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             [
                 tc["tool_call_id"],
                 tc["session_key"],
@@ -865,6 +928,10 @@ def _load_facts(
                 tc["input_json"],
                 tc["input_summary"],
                 tc["output_text"],
+                tc["file_path"],
+                tc["command"],
+                tc["pattern"],
+                tc["query_text"],
             ],
         )
 
@@ -978,5 +1045,20 @@ def _load_facts(
                 tc["step_position"],
                 tc["prev_tool_key"],
                 tc["time_since_prev_seconds"],
+            ],
+        )
+
+    # fact_tool_input_params
+    for param in tool_input_params_data:
+        conn.execute(
+            """INSERT INTO fact_tool_input_params VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            [
+                param["param_id"],
+                param["tool_call_id"],
+                param["session_key"],
+                param["param_key"],
+                param["param_value_text"],
+                param["param_value_number"],
+                param["param_value_bool"],
             ],
         )

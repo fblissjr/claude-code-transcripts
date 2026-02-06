@@ -12,6 +12,8 @@ from pathlib import Path
 
 import httpx
 
+from ..parsers.session import extract_repo_from_session
+
 # API constants
 API_BASE_URL = "https://api.anthropic.com/v1"
 ANTHROPIC_VERSION = "2023-06-01"
@@ -154,6 +156,38 @@ def fetch_session(token, org_uuid, session_id):
     return response.json()
 
 
+def enrich_sessions_with_repos(sessions):
+    """Enrich sessions with repo information from session metadata.
+
+    Args:
+        sessions: List of session dicts from the API
+
+    Returns:
+        List of session dicts with 'repo' key added
+    """
+    enriched = []
+    for session in sessions:
+        session_copy = dict(session)
+        session_copy["repo"] = extract_repo_from_session(session)
+        enriched.append(session_copy)
+    return enriched
+
+
+def filter_sessions_by_repo(sessions, repo):
+    """Filter sessions by repo.
+
+    Args:
+        sessions: List of session dicts with 'repo' key
+        repo: Repo to filter by (owner/name), or None to return all
+
+    Returns:
+        Filtered list of sessions
+    """
+    if repo is None:
+        return sessions
+    return [s for s in sessions if s.get("repo") == repo]
+
+
 __all__ = [
     "API_BASE_URL",
     "ANTHROPIC_VERSION",
@@ -163,4 +197,6 @@ __all__ = [
     "get_api_headers",
     "fetch_sessions",
     "fetch_session",
+    "enrich_sessions_with_repos",
+    "filter_sessions_by_repo",
 ]

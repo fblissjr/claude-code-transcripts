@@ -5,6 +5,7 @@ extracting content from messages, and discovering sessions across projects.
 """
 
 from .session import (
+    extract_repo_from_session,
     extract_searchable_content,
     extract_session_metadata,
     extract_session_slug,
@@ -43,6 +44,7 @@ from .schema_inspector import (
 
 __all__ = [
     # Session parsing
+    "extract_repo_from_session",
     "extract_searchable_content",
     "extract_session_metadata",
     "extract_session_slug",

@@ -34,6 +34,7 @@ FACT_TABLES = [
     "fact_errors",
     "fact_entity_mentions",
     "fact_tool_chain_steps",
+    "fact_tool_input_params",
     "fact_message_enrichment",
     "fact_message_topics",
     "fact_session_insights",

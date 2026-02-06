@@ -210,7 +210,11 @@ def create_star_schema(db_path):
             is_error BOOLEAN,
             input_json JSON,
             input_summary TEXT,
-            output_text TEXT
+            output_text TEXT,
+            file_path VARCHAR,
+            command VARCHAR,
+            pattern VARCHAR,
+            query_text VARCHAR
         )
     """
     )
@@ -369,6 +373,24 @@ def create_star_schema(db_path):
             step_position INTEGER,
             prev_tool_key VARCHAR,
             time_since_prev_seconds FLOAT
+        )
+    """
+    )
+
+    # =========================================================================
+    # Tool Input Parameters (Un-nested key-value pairs)
+    # =========================================================================
+
+    conn.execute(
+        """
+        CREATE OR REPLACE TABLE fact_tool_input_params (
+            param_id VARCHAR,
+            tool_call_id VARCHAR,
+            session_key VARCHAR,
+            param_key VARCHAR,
+            param_value_text VARCHAR,
+            param_value_number FLOAT,
+            param_value_bool BOOLEAN
         )
     """
     )
@@ -648,6 +670,11 @@ def _populate_reference_data(conn):
             ftc.is_error,
             ftc.input_summary,
             ftc.output_text,
+            -- Extracted parameters
+            ftc.file_path,
+            ftc.command,
+            ftc.pattern,
+            ftc.query_text,
             -- Tool
             dt.tool_name,
             dt.tool_category,

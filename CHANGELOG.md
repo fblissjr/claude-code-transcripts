@@ -2,9 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## 0.7
 
 ### Added
+- **Repo display and filtering in `web` command**: Shows which GitHub repo each session belongs to (adapted from upstream simonw/claude-code-transcripts v0.6)
+  - `extract_repo_from_session()`: Extracts repo from API session metadata (outcomes or sources URL)
+  - `enrich_sessions_with_repos()`: Adds `repo` key to session list data
+  - `filter_sessions_by_repo()`: Client-side filtering by repo name
+  - Session picker now shows `{repo}  {date}  {title}` instead of `{session_id}  {date}  {title}`
+  - `--repo` flag now filters session list in addition to setting default for commit links
+- **Un-nested tool parameters in star schema**: Extract common tool parameters from JSON blobs for easier querying
+  - New columns in `fact_tool_calls`: `file_path`, `command`, `pattern`, `query_text`
+  - New `fact_tool_input_params` table: Key-value pairs for all tool input parameters
+  - Updated `semantic_tool_calls` view to include extracted columns
+  - Supports queries like `SELECT * FROM fact_tool_calls WHERE file_path IS NOT NULL`
 - **Star schema support in `all` command**: Full star schema support for batch exports
   - New format options: `--format duckdb-star`, `--format json-star`
   - Uses 25+ dimensional tables for richer analytics

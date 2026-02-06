@@ -9,12 +9,21 @@ import click
 import httpx
 import questionary
 
-from ..api import fetch_session, fetch_sessions
+from ..api import (
+    enrich_sessions_with_repos,
+    fetch_session,
+    fetch_sessions,
+    filter_sessions_by_repo,
+)
 from ..export import (
     create_gist,
     inject_gist_preview_js,
 )
-from .utils import resolve_credentials, generate_html_from_session_data
+from .utils import (
+    format_session_for_display,
+    generate_html_from_session_data,
+    resolve_credentials,
+)
 
 
 @click.command("web")
@@ -37,7 +46,7 @@ from .utils import resolve_credentials, generate_html_from_session_data
 )
 @click.option(
     "--repo",
-    help="GitHub repo (owner/name) for commit links. Auto-detected from git push output if not specified.",
+    help="GitHub repo (owner/name). Filters session list and sets default for commit links.",
 )
 @click.option(
     "--gist",
@@ -123,16 +132,20 @@ def web_cmd(
         if not sessions:
             raise click.ClickException("No sessions found.")
 
+        # Enrich sessions with repo information from session metadata
+        sessions = enrich_sessions_with_repos(sessions)
+
+        # Filter by repo if specified
+        if repo:
+            sessions = filter_sessions_by_repo(sessions, repo)
+            if not sessions:
+                raise click.ClickException(f"No sessions found for repo: {repo}")
+
         # Build choices for questionary
         choices = []
         for s in sessions:
             sid = s.get("id", "unknown")
-            title = s.get("title", "Untitled")
-            created_at = s.get("created_at", "")
-            # Truncate title if too long
-            if len(title) > 50:
-                title = title[:47] + "..."
-            display = f"{created_at[:19] if created_at else 'N/A':19}  {title}"
+            display = format_session_for_display(s)
             choices.append(questionary.Choice(title=display, value=sid))
 
         selected = questionary.select(

@@ -301,6 +301,54 @@ Tool invocation facts - links tool_use to tool_result.
 | input_json | JSON | Full tool input |
 | input_summary | TEXT | Truncated input |
 | output_text | TEXT | Truncated output |
+| file_path | VARCHAR | Extracted file path (Read, Write, Edit, Glob) |
+| command | VARCHAR | Extracted command (Bash tool) |
+| pattern | VARCHAR | Extracted pattern (Grep tool) |
+| query_text | VARCHAR | Extracted query or URL (WebSearch, WebFetch) |
+
+**Extracted columns** allow direct SQL filtering without JSON parsing:
+
+```sql
+-- Find all file operations on Python files
+SELECT tool_call_id, file_path
+FROM fact_tool_calls
+WHERE file_path LIKE '%.py';
+
+-- Find Bash commands that failed
+SELECT command, output_text
+FROM fact_tool_calls ftc
+JOIN dim_tool dt ON ftc.tool_key = dt.tool_key
+WHERE dt.tool_name = 'Bash' AND is_error = TRUE;
+```
+
+### fact_tool_input_params
+
+Un-nested key-value pairs from tool input JSON for granular exploration.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| param_id | VARCHAR | Unique parameter ID (tool_call_id + param_key) |
+| tool_call_id | VARCHAR | FK to fact_tool_calls |
+| session_key | VARCHAR | FK to dim_session |
+| param_key | VARCHAR | Parameter name (e.g., "file_path", "content") |
+| param_value_text | VARCHAR | String value (truncated to 2000 chars) |
+| param_value_number | FLOAT | Numeric value |
+| param_value_bool | BOOLEAN | Boolean value |
+
+**Usage**: Explore which parameters are used most often across tools:
+
+```sql
+-- Most common tool parameters
+SELECT param_key, COUNT(*) as uses
+FROM fact_tool_input_params
+GROUP BY param_key
+ORDER BY uses DESC;
+
+-- Find all file paths touched
+SELECT DISTINCT param_value_text
+FROM fact_tool_input_params
+WHERE param_key = 'file_path';
+```
 
 ### fact_session_summary
 

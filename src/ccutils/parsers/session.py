@@ -4,6 +4,7 @@ Handles parsing of Claude Code session files in both JSON and JSONL formats.
 """
 
 import json
+import re
 from pathlib import Path
 
 
@@ -353,3 +354,35 @@ def extract_searchable_content(loglines, project_name, session_name):
                             add_document("tool_use", timestamp, tool_content)
 
     return documents
+
+
+def extract_repo_from_session(session):
+    """Extract GitHub repo from session metadata.
+
+    Looks in session_context.outcomes for git_info.repo,
+    or parses from session_context.sources URL.
+
+    Returns repo as "owner/name" or None.
+    """
+    context = session.get("session_context", {})
+
+    # Try outcomes first (has clean repo format)
+    outcomes = context.get("outcomes", [])
+    for outcome in outcomes:
+        if outcome.get("type") == "git_repository":
+            git_info = outcome.get("git_info", {})
+            repo = git_info.get("repo")
+            if repo:
+                return repo
+
+    # Fall back to sources URL
+    sources = context.get("sources", [])
+    for source in sources:
+        if source.get("type") == "git_repository":
+            url = source.get("url", "")
+            if "github.com/" in url:
+                match = re.search(r"github\.com/([^/]+/[^/]+?)(?:\.git)?$", url)
+                if match:
+                    return match.group(1)
+
+    return None
